@@ -10,7 +10,7 @@ function parseJsonSafely(rawText) {
   return JSON.parse(cleaned);
 }
 
-async function discoverActiveGeminiModels(apiKey) {
+async function discoverActiveModels(apiKey) {
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
@@ -47,7 +47,8 @@ async function discoverActiveGeminiModels(apiKey) {
           let s = 0;
           if (n.includes('flash')) s += 20;
           if (n === 'gemini-2.5-flash' || n === 'gemini-flash-latest') s += 10;
-          if (n.includes('3-flash') || n.includes('2.5')) s += 5;
+          if (n.includes('gemma-3-27b')) s += 8;
+          if (n.includes('gemma-3')) s += 5;
           if (n.includes('pro')) s -= 5;
           if (n.includes('preview') || n.includes('exp')) s -= 3;
           return s;
@@ -57,6 +58,39 @@ async function discoverActiveGeminiModels(apiKey) {
   } catch {
     return [];
   }
+}
+
+function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema) {
+  const isGemma = modelName.toLowerCase().includes('gemma');
+
+  if (isGemma) {
+    const schemaHint = responseSchema
+      ? `\n\nStruktur JSON WAJIB mengikuti skema berikut:\n${JSON.stringify(responseSchema)}`
+      : '';
+    const mergedText = [
+      systemPrompt ? `INSTRUKSI SISTEM:\n${systemPrompt}` : '',
+      `TUGAS:\n${userPrompt}${schemaHint}\n\nPENTING: Jawab HANYA dengan objek JSON valid tanpa teks pengantar, penutup, atau blok markdown.`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    return {
+      contents: [{ role: 'user', parts: [{ text: mergedText }] }],
+      generationConfig: {
+        temperature: 0.7,
+      },
+    };
+  }
+
+  return {
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+    generationConfig: {
+      temperature: 0.75,
+      responseMimeType: 'application/json',
+      responseSchema: responseSchema || undefined,
+    },
+  };
 }
 
 export default async function handler(req, res) {
@@ -106,34 +140,29 @@ export default async function handler(req, res) {
       'gemini-2.5-flash',
       'gemini-flash-latest',
       'gemini-2.0-flash',
+      'gemma-3-27b-it',
     ];
     let hasDiscovered = false;
     let lastError = 'Gagal menghubungi layanan Gemini AI.';
     let lastStatus = 502;
 
-    while (queue.length > 0 && triedModels.size < 6) {
+    while (queue.length > 0 && triedModels.size < 7) {
       const modelName = queue.shift();
       if (!modelName || triedModels.has(modelName)) continue;
       triedModels.add(modelName);
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 18000);
 
       try {
         const googleRes = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-            systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-            generationConfig: {
-              temperature: 0.75,
-              responseMimeType: 'application/json',
-              responseSchema: responseSchema || undefined,
-            },
-          }),
+          body: JSON.stringify(
+            buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema)
+          ),
         });
 
         const data = await googleRes.json().catch(() => ({}));
@@ -145,7 +174,7 @@ export default async function handler(req, res) {
 
           if (!hasDiscovered && (googleRes.status === 404 || googleRes.status === 429)) {
             hasDiscovered = true;
-            const activeModels = await discoverActiveGeminiModels(apiKey);
+            const activeModels = await discoverActiveModels(apiKey);
             activeModels.forEach((m) => {
               if (!triedModels.has(m)) queue.push(m);
             });
