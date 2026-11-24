@@ -1,4 +1,5 @@
 let cachedWorkingModel = null;
+let cachedGroqModel = null;
 let keyCursor = 0;
 let groqKeyCursor = 0;
 
@@ -71,45 +72,140 @@ function buildPayloadForModel(
   };
 }
 
+async function discoverGroqModels(groqKey) {
+  const fallbackCandidates = [
+    ...(cachedGroqModel ? [cachedGroqModel] : []),
+    'openai/gpt-oss-120b',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'llama-3.1-8b-instant',
+    'openai/gpt-oss-20b',
+    'qwen/qwen3-32b',
+  ];
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/models', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${groqKey}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) return [...new Set(fallbackCandidates)];
+
+    const data = await res.json().catch(() => ({}));
+    const liveIds = (Array.isArray(data?.data) ? data.data : [])
+      .map((m) => m?.id)
+      .filter((id) => {
+        if (!id || typeof id !== 'string') return false;
+        const lower = id.toLowerCase();
+        return (
+          !lower.includes('whisper') &&
+          !lower.includes('guard') &&
+          !lower.includes('tts') &&
+          !lower.includes('orpheus') &&
+          !lower.includes('embed') &&
+          !lower.includes('safeguard')
+        );
+      });
+
+    const prioritized = fallbackCandidates.filter((m) => liveIds.includes(m));
+    const remaining = liveIds.filter((m) => !prioritized.includes(m));
+    const combined = [...prioritized, ...remaining];
+    return combined.length > 0 ? combined.slice(0, 5) : [...new Set(fallbackCandidates)];
+  } catch {
+    return [...new Set(fallbackCandidates)];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function callGroqFallback(groqKey, systemPrompt, userPrompt) {
   const schemaInstruction = `\n\nWAJIB keluarkan HANYA JSON valid dengan format persis:
 {"items":[{"deepLearningPhase":"...","graduateDimension":"...","material":"...","stimulusType":"...","indicator":"...","cognitiveLevel":"L2 - Aplikasi (C3) atau L3 - Penalaran (C4)","questionType":"PG atau PG_KOMPLEKS atau BENAR_SALAH","questionText":"...","optionStructureSummary":"...","options":["opsi 1","opsi 2","opsi 3","opsi 4","opsi 5"],"correctPgIndex":0,"correctMultiIndices":[0,1],"correctBsBooleans":[true,false,true,false,true]}]}`;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 18000);
+  const modelsToTry = await discoverGroqModels(groqKey);
+  let lastGroqErr = 'Tidak ada model Groq yang merespons.';
 
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${groqKey}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.65,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content: `${systemPrompt || 'Anda adalah penyusun soal TKA profesional.'}${schemaInstruction}`,
+  for (const modelName of modelsToTry) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 16000);
+
+    try {
+      const messages = [
+        {
+          role: 'system',
+          content: `${systemPrompt || 'Anda adalah penyusun soal TKA profesional.'}${schemaInstruction}`,
+        },
+        { role: 'user', content: userPrompt },
+      ];
+
+      let res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${groqKey}`,
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: modelName,
+          temperature: 0.65,
+          response_format: { type: 'json_object' },
+          messages,
+        }),
+      });
+
+      let data = await res.json().catch(() => ({}));
+
+      // Jika model tertentu tidak mendukung parameter response_format, ulangi tanpa response_format
+      if (
+        !res.ok &&
+        res.status === 400 &&
+        String(data?.error?.message || '').toLowerCase().includes('json')
+      ) {
+        res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${groqKey}`,
           },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-    });
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: modelName,
+            temperature: 0.65,
+            messages,
+          }),
+        });
+        data = await res.json().catch(() => ({}));
+      }
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data?.error?.message || `Groq HTTP ${res.status}`);
+      if (!res.ok) {
+        lastGroqErr = data?.error?.message || `Groq HTTP ${res.status}`;
+        if (cachedGroqModel === modelName) cachedGroqModel = null;
+        if (res.status === 401 || res.status === 429) {
+          throw new Error(lastGroqErr);
+        }
+        continue;
+      }
+
+      const rawText = data?.choices?.[0]?.message?.content || '';
+      const parsed = parseJsonSafely(rawText);
+      cachedGroqModel = modelName;
+      return { model: modelName, parsed };
+    } catch (err) {
+      lastGroqErr = err?.message || lastGroqErr;
+      if (
+        String(lastGroqErr).toLowerCase().includes('invalid api key') ||
+        String(lastGroqErr).toLowerCase().includes('rate limit')
+      ) {
+        throw new Error(lastGroqErr);
+      }
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const rawText = data?.choices?.[0]?.message?.content || '';
-    return parseJsonSafely(rawText);
-  } finally {
-    clearTimeout(timeoutId);
   }
+
+  throw new Error(lastGroqErr);
 }
 
 export default async function handler(req, res) {
@@ -132,6 +228,7 @@ export default async function handler(req, res) {
       hasGroqFallback: groqKeys.length > 0,
       groqKeyCount: groqKeys.length,
       activeModel: cachedWorkingModel,
+      activeGroqModel: cachedGroqModel,
       message: 'Server API TKA siap digunakan.',
     });
   }
@@ -178,7 +275,7 @@ export default async function handler(req, res) {
         for (const modelName of uniqueModels) {
           const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(currentKey)}`;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 18000);
+          const timeoutId = setTimeout(() => controller.abort(), 16000);
 
           try {
             let googleRes = await fetch(endpoint, {
@@ -245,7 +342,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // Cadangan otomatis multi-key ke Groq jika semua API Key Gemini penuh
+    // Cadangan otomatis multi-key ke Groq dengan deteksi model aktif
     if (groqKeys.length > 0) {
       const rotatedGroqKeys = groqKeys.map(
         (_, idx) => groqKeys[(groqKeyCursor + idx) % groqKeys.length]
@@ -254,16 +351,18 @@ export default async function handler(req, res) {
 
       for (let gIdx = 0; gIdx < rotatedGroqKeys.length; gIdx++) {
         try {
-          const parsedGroq = await callGroqFallback(
+          const groqResult = await callGroqFallback(
             rotatedGroqKeys[gIdx],
             systemPrompt,
             userPrompt
           );
-          console.log(`[api/gemini] Sukses menggunakan cadangan Groq (Key #${gIdx + 1})`);
+          console.log(
+            `[api/gemini] Sukses menggunakan cadangan Groq (${groqResult.model}, Key #${gIdx + 1})`
+          );
           return res.status(200).json({
             ok: true,
-            model: 'groq/llama-3.3-70b-versatile',
-            result: parsedGroq,
+            model: `groq/${groqResult.model}`,
+            result: groqResult.parsed,
           });
         } catch (groqErr) {
           lastError = `Groq Key #${gIdx + 1} gagal: ${groqErr?.message || lastError}`;
