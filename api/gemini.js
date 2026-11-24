@@ -48,19 +48,20 @@ async function discoverActiveModels(apiKey) {
           !name.includes('aqa') &&
           !name.includes('robotics') &&
           !name.includes('computer-use') &&
-          !name.includes('deep-research') &&
-          !name.includes('-pro')
+          !name.includes('deep-research')
         );
       })
       .map((m) => String(m.name).replace(/^models\//, ''))
       .sort((a, b) => {
         const score = (n) => {
           let s = 0;
+          if (n.includes('3-flash')) s += 35;
           if (n.includes('2.5-flash')) s += 30;
           if (n.includes('flash')) s += 20;
+          if (n.includes('gemma-3-12b')) s += 15;
           if (n.includes('gemma-3-27b')) s += 12;
           if (n.includes('gemma-3')) s += 8;
-          if (n.includes('preview') || n.includes('exp')) s -= 5;
+          if (n.includes('-pro')) s -= 5;
           return s;
         };
         return score(b) - score(a);
@@ -71,8 +72,7 @@ async function discoverActiveModels(apiKey) {
 }
 
 function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema) {
-  const lower = modelName.toLowerCase();
-  const isGemma = lower.includes('gemma');
+  const isGemma = modelName.toLowerCase().includes('gemma');
 
   if (isGemma) {
     const schemaHint = responseSchema
@@ -93,21 +93,14 @@ function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchem
     };
   }
 
-  const generationConfig = {
-    temperature: 0.7,
-    responseMimeType: 'application/json',
-    responseSchema: responseSchema || undefined,
-  };
-
-  // Matikan thinking overhead pada Gemini 2.5 Flash agar respons selesai dalam 2-3 detik
-  if (lower.includes('2.5-flash')) {
-    generationConfig.thinkingConfig = { thinkingBudget: 0 };
-  }
-
   return {
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
     systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-    generationConfig,
+    generationConfig: {
+      temperature: 0.7,
+      responseMimeType: 'application/json',
+      responseSchema: responseSchema || undefined,
+    },
   };
 }
 
@@ -156,22 +149,24 @@ export default async function handler(req, res) {
     const queue = [
       ...(cachedWorkingModel ? [cachedWorkingModel] : []),
       'gemini-2.5-flash',
+      'gemini-3-flash-preview',
+      'gemini-flash-latest',
       'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
+      'gemma-3-12b-it',
       'gemma-3-27b-it',
     ];
     let hasDiscovered = false;
     let lastError = 'Gagal menghubungi layanan Gemini AI.';
     let lastStatus = 502;
 
-    while (queue.length > 0 && triedModels.size < 6) {
+    while (queue.length > 0 && triedModels.size < 12) {
       const modelName = queue.shift();
       if (!modelName || triedModels.has(modelName)) continue;
       triedModels.add(modelName);
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 22000);
+      const timeoutId = setTimeout(() => controller.abort(), 16000);
 
       try {
         const googleRes = await fetch(endpoint, {
@@ -190,7 +185,7 @@ export default async function handler(req, res) {
           lastError = data?.error?.message || `HTTP ${googleRes.status}`;
           if (cachedWorkingModel === modelName) cachedWorkingModel = null;
 
-          if (!hasDiscovered && (googleRes.status === 404 || googleRes.status === 429)) {
+          if (!hasDiscovered) {
             hasDiscovered = true;
             const activeModels = await discoverActiveModels(apiKey);
             activeModels.forEach((m) => {
@@ -202,7 +197,10 @@ export default async function handler(req, res) {
             googleRes.status === 400 ||
             googleRes.status === 404 ||
             googleRes.status === 429 ||
-            googleRes.status === 503
+            googleRes.status === 500 ||
+            googleRes.status === 502 ||
+            googleRes.status === 503 ||
+            googleRes.status === 504
           ) {
             continue;
           }
@@ -218,6 +216,13 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, model: modelName, result: parsed });
       } catch (attemptErr) {
         if (cachedWorkingModel === modelName) cachedWorkingModel = null;
+        if (!hasDiscovered) {
+          hasDiscovered = true;
+          const activeModels = await discoverActiveModels(apiKey);
+          activeModels.forEach((m) => {
+            if (!triedModels.has(m)) queue.push(m);
+          });
+        }
         lastStatus = attemptErr?.name === 'AbortError' ? 504 : 502;
         lastError =
           attemptErr?.name === 'AbortError'
