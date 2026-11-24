@@ -37,28 +37,8 @@ function buildPayloadForModel(
   fastMode = true
 ) {
   const lower = modelName.toLowerCase();
-  const isGemma = lower.includes('gemma');
   const speedDirective =
     '\n\nATURAN KECEPATAN: Susun konten secara tajam, langsung ke inti HOTS, dan padat tanpa kalimat basa-basi.';
-
-  if (isGemma) {
-    const schemaHint = responseSchema
-      ? `\n\nStruktur JSON WAJIB mengikuti skema berikut:\n${JSON.stringify(responseSchema)}`
-      : '';
-    const mergedText = [
-      systemPrompt ? `INSTRUKSI SISTEM:\n${systemPrompt}${speedDirective}` : speedDirective,
-      `TUGAS:\n${userPrompt}${schemaHint}\n\nPENTING: Jawab HANYA dengan objek JSON valid tanpa teks pengantar, penutup, atau blok markdown.`,
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-
-    return {
-      contents: [{ role: 'user', parts: [{ text: mergedText }] }],
-      generationConfig: {
-        temperature: 0.65,
-      },
-    };
-  }
 
   const generationConfig = {
     temperature: 0.65,
@@ -88,7 +68,7 @@ async function callGroqFallback(groqKey, systemPrompt, userPrompt) {
 {"items":[{"deepLearningPhase":"...","graduateDimension":"...","material":"...","stimulusType":"...","indicator":"...","cognitiveLevel":"L2 - Aplikasi (C3) atau L3 - Penalaran (C4)","questionType":"PG atau PG_KOMPLEKS atau BENAR_SALAH","questionText":"...","optionStructureSummary":"...","options":["opsi 1","opsi 2","opsi 3","opsi 4","opsi 5"],"correctPgIndex":0,"correctMultiIndices":[0,1],"correctBsBooleans":[true,false,true,false,true]}]}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 18000);
 
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -170,16 +150,15 @@ export default async function handler(req, res) {
     let lastStatus = 502;
 
     if (geminiKeys.length > 0) {
+      // Masing-masing model memiliki kuota harian/menit terpisah di Google AI Studio
       const baseModels = [
         ...(cachedWorkingModel ? [cachedWorkingModel] : []),
         'gemini-2.5-flash',
         'gemini-2.5-flash-lite',
         'gemini-3-flash-preview',
-        'gemma-3-27b-it',
       ];
       const uniqueModels = [...new Set(baseModels)];
 
-      // Putar urutan API Key agar beban terbagi rata ke semua key yang dipasang
       const rotatedKeys = geminiKeys.map(
         (_, idx) => geminiKeys[(keyCursor + idx) % geminiKeys.length]
       );
@@ -191,7 +170,7 @@ export default async function handler(req, res) {
         for (const modelName of uniqueModels) {
           const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(currentKey)}`;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 14000);
+          const timeoutId = setTimeout(() => controller.abort(), 18000);
 
           try {
             let googleRes = await fetch(endpoint, {
@@ -226,13 +205,11 @@ export default async function handler(req, res) {
               lastError = data?.error?.message || `HTTP ${googleRes.status}`;
               if (cachedWorkingModel === modelName) cachedWorkingModel = null;
 
-              // Jika kuota API Key ini penuh (429), langsung lompat ke API Key berikutnya
-              if (googleRes.status === 429) {
-                break;
-              }
+              // Tetap lanjut mencoba model lain pada key yang sama karena kuota dihitung per model
               if (
                 googleRes.status === 400 ||
                 googleRes.status === 404 ||
+                googleRes.status === 429 ||
                 googleRes.status === 500 ||
                 googleRes.status === 502 ||
                 googleRes.status === 503 ||
@@ -261,7 +238,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // Cadangan otomatis ke Groq jika semua API Key Gemini terkena 429/503
+    // Cadangan otomatis ke Groq (kuota gratis 1.000 permintaan/hari) jika kuota Gemini habis
     if (groqKey) {
       try {
         const parsedGroq = await callGroqFallback(groqKey, systemPrompt, userPrompt);
