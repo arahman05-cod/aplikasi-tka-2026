@@ -7,7 +7,17 @@ function parseJsonSafely(rawText) {
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
-  return JSON.parse(cleaned);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error('Respons AI tidak berbentuk JSON valid.');
+  }
 }
 
 async function discoverActiveModels(apiKey) {
@@ -38,19 +48,19 @@ async function discoverActiveModels(apiKey) {
           !name.includes('aqa') &&
           !name.includes('robotics') &&
           !name.includes('computer-use') &&
-          !name.includes('deep-research')
+          !name.includes('deep-research') &&
+          !name.includes('-pro')
         );
       })
       .map((m) => String(m.name).replace(/^models\//, ''))
       .sort((a, b) => {
         const score = (n) => {
           let s = 0;
+          if (n.includes('2.5-flash')) s += 30;
           if (n.includes('flash')) s += 20;
-          if (n === 'gemini-2.5-flash' || n === 'gemini-flash-latest') s += 10;
-          if (n.includes('gemma-3-27b')) s += 8;
-          if (n.includes('gemma-3')) s += 5;
-          if (n.includes('pro')) s -= 5;
-          if (n.includes('preview') || n.includes('exp')) s -= 3;
+          if (n.includes('gemma-3-27b')) s += 12;
+          if (n.includes('gemma-3')) s += 8;
+          if (n.includes('preview') || n.includes('exp')) s -= 5;
           return s;
         };
         return score(b) - score(a);
@@ -61,7 +71,8 @@ async function discoverActiveModels(apiKey) {
 }
 
 function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema) {
-  const isGemma = modelName.toLowerCase().includes('gemma');
+  const lower = modelName.toLowerCase();
+  const isGemma = lower.includes('gemma');
 
   if (isGemma) {
     const schemaHint = responseSchema
@@ -82,14 +93,21 @@ function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchem
     };
   }
 
+  const generationConfig = {
+    temperature: 0.7,
+    responseMimeType: 'application/json',
+    responseSchema: responseSchema || undefined,
+  };
+
+  // Matikan thinking overhead pada Gemini 2.5 Flash agar respons selesai dalam 2-3 detik
+  if (lower.includes('2.5-flash')) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
+
   return {
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
     systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-    generationConfig: {
-      temperature: 0.75,
-      responseMimeType: 'application/json',
-      responseSchema: responseSchema || undefined,
-    },
+    generationConfig,
   };
 }
 
@@ -138,7 +156,7 @@ export default async function handler(req, res) {
     const queue = [
       ...(cachedWorkingModel ? [cachedWorkingModel] : []),
       'gemini-2.5-flash',
-      'gemini-flash-latest',
+      'gemini-2.5-flash-lite',
       'gemini-2.0-flash',
       'gemma-3-27b-it',
     ];
@@ -146,14 +164,14 @@ export default async function handler(req, res) {
     let lastError = 'Gagal menghubungi layanan Gemini AI.';
     let lastStatus = 502;
 
-    while (queue.length > 0 && triedModels.size < 7) {
+    while (queue.length > 0 && triedModels.size < 6) {
       const modelName = queue.shift();
       if (!modelName || triedModels.has(modelName)) continue;
       triedModels.add(modelName);
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 18000);
+      const timeoutId = setTimeout(() => controller.abort(), 22000);
 
       try {
         const googleRes = await fetch(endpoint, {
@@ -180,7 +198,12 @@ export default async function handler(req, res) {
             });
           }
 
-          if (googleRes.status === 404 || googleRes.status === 429 || googleRes.status === 503) {
+          if (
+            googleRes.status === 400 ||
+            googleRes.status === 404 ||
+            googleRes.status === 429 ||
+            googleRes.status === 503
+          ) {
             continue;
           }
 
@@ -193,6 +216,14 @@ export default async function handler(req, res) {
         cachedWorkingModel = modelName;
         console.log(`[api/gemini] Sukses menggunakan model: ${modelName}`);
         return res.status(200).json({ ok: true, model: modelName, result: parsed });
+      } catch (attemptErr) {
+        if (cachedWorkingModel === modelName) cachedWorkingModel = null;
+        lastStatus = attemptErr?.name === 'AbortError' ? 504 : 502;
+        lastError =
+          attemptErr?.name === 'AbortError'
+            ? `Model ${modelName} melebihi batas waktu tunggu.`
+            : attemptErr?.message || 'Koneksi ke Gemini terputus.';
+        continue;
       } finally {
         clearTimeout(timeoutId);
       }
