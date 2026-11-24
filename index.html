@@ -3614,7 +3614,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
         let normalizedItem = null;
         let attempt = 0;
 
-        while (attempt < 2 && !normalizedItem) {
+        while (attempt < 4 && !normalizedItem) {
           attempt++;
           try {
             const aiResult = await callGeminiTkaJson(systemPrompt, userPrompt, responseSchema);
@@ -3642,11 +3642,11 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           } catch (err) {
             lastFallbackReason = err?.message || '';
             if (
-              attempt < 2 &&
+              attempt < 4 &&
               lastFallbackReason !== 'MISSING_API_KEY' &&
               lastFallbackReason !== 'INVALID_API_KEY'
             ) {
-              await pauseMs(1200);
+              await pauseMs(1500 * attempt);
               continue;
             }
             fallbackCountUsed += 1;
