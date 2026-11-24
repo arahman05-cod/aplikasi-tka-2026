@@ -1200,7 +1200,7 @@ function doPost(e) {
       if (window.location.protocol.startsWith('http')) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 35000);
+          const timeoutId = setTimeout(() => controller.abort(), 55000);
           const serverRes = await fetch('/api/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
