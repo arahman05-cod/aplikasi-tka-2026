@@ -1119,15 +1119,29 @@ function doPost(e) {
     // =========================================================================
     // 5. INTEGRASI GEMINI AI & KESEIMBANGAN OPSI SOAL TKA
     // =========================================================================
+    function extractGeminiKeyFromProktorCode(proktorCode) {
+      const raw = String(proktorCode || '');
+      const sepIdx = raw.indexOf('||');
+      if (sepIdx >= 0) {
+        return raw.slice(sepIdx + 2).trim();
+      }
+      return '';
+    }
+
     function getStoredGeminiApiKey() {
       try {
         const saved = localStorage.getItem(GEMINI_API_KEY_STORAGE_KEY);
         if (saved && saved.trim()) return saved.trim();
       } catch {}
+      const proktorRec = state.teachers.find((t) => t.role === 'proktor' || t.id === 'teacher_proktor_1');
+      if (proktorRec) {
+        const sharedKey = extractGeminiKeyFromProktorCode(proktorRec.proktorCode);
+        if (sharedKey) return sharedKey;
+      }
       return '';
     }
 
-    function handleSaveGeminiKey() {
+    async function handleSaveGeminiKey() {
       if (getCurrentTeacher()?.role !== 'proktor') return;
       const clean = String(state.geminiApiKeyInput || '').trim();
       if (!clean) {
@@ -1137,34 +1151,62 @@ function doPost(e) {
       try {
         localStorage.setItem(GEMINI_API_KEY_STORAGE_KEY, clean);
       } catch {}
-      showToast('API Key Gemini AI berhasil disimpan!');
+
+      await runWithSavingAnimation(
+        'Menyimpan & menyinkronkan API Key Gemini AI untuk seluruh Guru...',
+        async () => {
+          const proktorRec = state.teachers.find((t) => t.role === 'proktor' || t.id === 'teacher_proktor_1');
+          if (proktorRec) {
+            const baseCode = String(proktorRec.proktorCode || 'P-ADM206-26').split('||')[0] || 'P-ADM206-26';
+            await saveRecordUnified('teachers', proktorRec.id, {
+              ...proktorRec,
+              proktorCode: `${baseCode}||${clean}`,
+            });
+          }
+        },
+        'API Key Gemini AI berhasil disimpan & otomatis aktif untuk seluruh akun Guru!'
+      );
       renderApp();
     }
 
-    function handleResetGeminiKey() {
+    async function handleResetGeminiKey() {
       if (getCurrentTeacher()?.role !== 'proktor') return;
       try {
         localStorage.removeItem(GEMINI_API_KEY_STORAGE_KEY);
       } catch {}
       state.geminiApiKeyInput = '';
-      showToast('Konfigurasi API Key lokal telah dibersihkan.');
+
+      await runWithSavingAnimation(
+        'Membersihkan konfigurasi API Key...',
+        async () => {
+          const proktorRec = state.teachers.find((t) => t.role === 'proktor' || t.id === 'teacher_proktor_1');
+          if (proktorRec) {
+            const baseCode = String(proktorRec.proktorCode || 'P-ADM206-26').split('||')[0] || 'P-ADM206-26';
+            await saveRecordUnified('teachers', proktorRec.id, {
+              ...proktorRec,
+              proktorCode: baseCode,
+            });
+          }
+        },
+        'Konfigurasi API Key telah dibersihkan.'
+      );
       renderApp();
     }
 
     async function callGeminiTkaJson(systemPrompt, userPrompt, responseSchema) {
       const apiKey = getStoredGeminiApiKey();
       if (!apiKey) {
-        throw new Error('API Key Gemini AI belum dikonfigurasi.');
+        throw new Error('MISSING_API_KEY');
       }
 
-      const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+      const models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
       let lastErr = null;
 
       for (let mIdx = 0; mIdx < models.length; mIdx++) {
         const modelName = models[mIdx];
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 28000);
+        const timeoutId = setTimeout(() => controller.abort(), 32000);
 
         try {
           const res = await fetch(endpoint, {
@@ -1182,8 +1224,16 @@ function doPost(e) {
             }),
           });
           if (!res.ok) {
-            lastErr = new Error(`HTTP ${res.status}`);
-            if (res.status === 404 && mIdx < models.length - 1) continue;
+            const errText = await res.text().catch(() => '');
+            if ((res.status === 400 || res.status === 403) && /API_KEY_INVALID|API key not valid|permission/i.test(errText)) {
+              throw new Error('INVALID_API_KEY');
+            }
+            if (res.status === 429) {
+              lastErr = new Error('RATE_LIMIT');
+            } else {
+              lastErr = new Error(`HTTP_${res.status}`);
+            }
+            if (mIdx < models.length - 1) continue;
             throw lastErr;
           }
           const data = await res.json();
@@ -1191,6 +1241,7 @@ function doPost(e) {
           return typeof rawText === 'string' ? JSON.parse(rawText) : rawText;
         } catch (err) {
           lastErr = err;
+          if (err?.message === 'INVALID_API_KEY') throw err;
           if (mIdx === models.length - 1) throw lastErr;
         } finally {
           clearTimeout(timeoutId);
@@ -1698,6 +1749,16 @@ function doPost(e) {
               merged.unshift(activeBeforeSync);
             }
             state.teachers = merged;
+
+            const proktorWithKey = state.teachers.find((t) => extractGeminiKeyFromProktorCode(t.proktorCode));
+            if (proktorWithKey) {
+              const syncedKey = extractGeminiKeyFromProktorCode(proktorWithKey.proktorCode);
+              if (syncedKey) {
+                try {
+                  localStorage.setItem(GEMINI_API_KEY_STORAGE_KEY, syncedKey);
+                } catch {}
+              }
+            }
           }
           if (Array.isArray(data.tps)) {
             state.tps = data.tps;
@@ -3486,6 +3547,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
       let generatedItems = [];
       const usedTopicsSummary = [];
       let fallbackCountUsed = 0;
+      let lastFallbackReason = '';
 
       while (generatedItems.length < targetCount) {
         const remaining = targetCount - generatedItems.length;
@@ -3530,7 +3592,8 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           } else {
             throw new Error('Format output AI tidak memuat daftar butir soal.');
           }
-        } catch {
+        } catch (err) {
+          lastFallbackReason = err?.message || '';
           fallbackCountUsed += currentBatchSize;
           const fallbackSlice = buildFallbackTkaBundle(
             teacher,
@@ -3546,11 +3609,13 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
       }
 
       if (fallbackCountUsed > 0) {
-        showToast(
-          `Sebagian soal (${fallbackCountUsed} butir) disusun menggunakan bank templat terstandar sesuai TP karena koneksi API sedang padat.`,
-          'warning',
-          'Info Generator'
-        );
+        const reasonMessage =
+          lastFallbackReason === 'MISSING_API_KEY'
+            ? `API Key Gemini AI belum dipasang oleh Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan bank templat standar BSKAP sesuai TP.`
+            : lastFallbackReason === 'INVALID_API_KEY'
+            ? `API Key Gemini AI tidak valid atau kedaluwarsa. Periksa kembali API Key di menu Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan templat standar.`
+            : `Sebagian soal (${fallbackCountUsed} butir) disusun menggunakan bank templat terstandar sesuai TP karena koneksi/kuota API sedang padat.`;
+        showToast(reasonMessage, 'warning', 'Info Generator');
       }
 
       generatedItems = distributeGeneratedOptionKeys(generatedItems.slice(0, targetCount));
@@ -7243,7 +7308,7 @@ Berikan penilaian OBJEKTIF dan KRITIS:
               <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
                 <div>
                   <h3 class="text-sm font-extrabold text-[#002b7a]">Konfigurasi Gemini AI (Generator &amp; Telaah Soal)</h3>
-                  <p class="text-slate-500">Opsional: Masukkan API Key Google AI Studio untuk penyusunan soal berbasis AI generatif.</p>
+                  <p class="text-slate-500">Masukkan API Key Google AI Studio. Kunci ini otomatis disinkronkan untuk seluruh akun Guru di semua perangkat.</p>
                 </div>
 
                 <div class="space-y-3">
@@ -7265,7 +7330,7 @@ Berikan penilaian OBJEKTIF dan KRITIS:
                     </button>
                   </div>
                   <p class="text-[11px] text-slate-500">
-                    Status saat ini: <strong>${storedGeminiKey ? 'API Key Kustom Aktif' : 'Menggunakan Templat Standar TKA BSKAP'}</strong>.
+                    Status saat ini: <strong>${storedGeminiKey ? 'API Key Gemini AI Aktif (Tersinkronisasi ke Semua Guru)' : 'Belum Dipasang (Menggunakan Templat Standar BSKAP)'}</strong>.
                   </p>
                 </div>
               </div>
