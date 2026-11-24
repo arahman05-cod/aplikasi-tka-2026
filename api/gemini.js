@@ -1,12 +1,20 @@
 let cachedWorkingModel = null;
 let keyCursor = 0;
+let groqKeyCursor = 0;
 
-function getGeminiApiKeys() {
-  const raw = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-  return raw
+function parseMultiKeys(rawValue) {
+  return String(rawValue || '')
     .split(/[\n,;]+/)
     .map((k) => k.trim())
     .filter(Boolean);
+}
+
+function getGeminiApiKeys() {
+  return parseMultiKeys(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '');
+}
+
+function getGroqApiKeys() {
+  return parseMultiKeys(process.env.GROQ_API_KEY || '');
 }
 
 function parseJsonSafely(rawText) {
@@ -114,14 +122,15 @@ export default async function handler(req, res) {
   }
 
   const geminiKeys = getGeminiApiKeys();
-  const groqKey = (process.env.GROQ_API_KEY || '').trim();
+  const groqKeys = getGroqApiKeys();
 
   if (req.method === 'GET') {
     return res.status(200).json({
       ok: true,
-      hasKey: geminiKeys.length > 0 || Boolean(groqKey),
+      hasKey: geminiKeys.length > 0 || groqKeys.length > 0,
       geminiKeyCount: geminiKeys.length,
-      hasGroqFallback: Boolean(groqKey),
+      hasGroqFallback: groqKeys.length > 0,
+      groqKeyCount: groqKeys.length,
       activeModel: cachedWorkingModel,
       message: 'Server API TKA siap digunakan.',
     });
@@ -131,10 +140,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: 'Metode tidak diizinkan.' });
   }
 
-  if (geminiKeys.length === 0 && !groqKey) {
+  if (geminiKeys.length === 0 && groqKeys.length === 0) {
     return res.status(500).json({
       ok: false,
-      error: 'GEMINI_API_KEY belum dipasang di Environment Variables Vercel.',
+      error: 'GEMINI_API_KEY atau GROQ_API_KEY belum dipasang di Environment Variables Vercel.',
     });
   }
 
@@ -150,7 +159,6 @@ export default async function handler(req, res) {
     let lastStatus = 502;
 
     if (geminiKeys.length > 0) {
-      // Masing-masing model memiliki kuota harian/menit terpisah di Google AI Studio
       const baseModels = [
         ...(cachedWorkingModel ? [cachedWorkingModel] : []),
         'gemini-2.5-flash',
@@ -205,7 +213,6 @@ export default async function handler(req, res) {
               lastError = data?.error?.message || `HTTP ${googleRes.status}`;
               if (cachedWorkingModel === modelName) cachedWorkingModel = null;
 
-              // Tetap lanjut mencoba model lain pada key yang sama karena kuota dihitung per model
               if (
                 googleRes.status === 400 ||
                 googleRes.status === 404 ||
@@ -221,7 +228,7 @@ export default async function handler(req, res) {
               const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
               const parsed = parseJsonSafely(rawText);
               cachedWorkingModel = modelName;
-              console.log(`[api/gemini] Sukses menggunakan ${modelName} (Key #${kIdx + 1})`);
+              console.log(`[api/gemini] Sukses menggunakan ${modelName} (Gemini Key #${kIdx + 1})`);
               return res.status(200).json({ ok: true, model: modelName, result: parsed });
             }
           } catch (attemptErr) {
@@ -238,18 +245,29 @@ export default async function handler(req, res) {
       }
     }
 
-    // Cadangan otomatis ke Groq (kuota gratis 1.000 permintaan/hari) jika kuota Gemini habis
-    if (groqKey) {
-      try {
-        const parsedGroq = await callGroqFallback(groqKey, systemPrompt, userPrompt);
-        console.log('[api/gemini] Sukses menggunakan cadangan Groq (llama-3.3-70b-versatile)');
-        return res.status(200).json({
-          ok: true,
-          model: 'groq/llama-3.3-70b-versatile',
-          result: parsedGroq,
-        });
-      } catch (groqErr) {
-        lastError = `Gemini & Groq gagal: ${groqErr?.message || lastError}`;
+    // Cadangan otomatis multi-key ke Groq jika semua API Key Gemini penuh
+    if (groqKeys.length > 0) {
+      const rotatedGroqKeys = groqKeys.map(
+        (_, idx) => groqKeys[(groqKeyCursor + idx) % groqKeys.length]
+      );
+      groqKeyCursor = (groqKeyCursor + 1) % groqKeys.length;
+
+      for (let gIdx = 0; gIdx < rotatedGroqKeys.length; gIdx++) {
+        try {
+          const parsedGroq = await callGroqFallback(
+            rotatedGroqKeys[gIdx],
+            systemPrompt,
+            userPrompt
+          );
+          console.log(`[api/gemini] Sukses menggunakan cadangan Groq (Key #${gIdx + 1})`);
+          return res.status(200).json({
+            ok: true,
+            model: 'groq/llama-3.3-70b-versatile',
+            result: parsedGroq,
+          });
+        } catch (groqErr) {
+          lastError = `Groq Key #${gIdx + 1} gagal: ${groqErr?.message || lastError}`;
+        }
       }
     }
 
