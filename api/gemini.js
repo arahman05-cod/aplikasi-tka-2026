@@ -1,4 +1,13 @@
 let cachedWorkingModel = null;
+let keyCursor = 0;
+
+function getGeminiApiKeys() {
+  const raw = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+  return raw
+    .split(/[\n,;]+/)
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
 
 function parseJsonSafely(rawText) {
   if (typeof rawText !== 'string') return rawText;
@@ -74,6 +83,47 @@ function buildPayloadForModel(
   };
 }
 
+async function callGroqFallback(groqKey, systemPrompt, userPrompt) {
+  const schemaInstruction = `\n\nWAJIB keluarkan HANYA JSON valid dengan format persis:
+{"items":[{"deepLearningPhase":"...","graduateDimension":"...","material":"...","stimulusType":"...","indicator":"...","cognitiveLevel":"L2 - Aplikasi (C3) atau L3 - Penalaran (C4)","questionType":"PG atau PG_KOMPLEKS atau BENAR_SALAH","questionText":"...","optionStructureSummary":"...","options":["opsi 1","opsi 2","opsi 3","opsi 4","opsi 5"],"correctPgIndex":0,"correctMultiIndices":[0,1],"correctBsBooleans":[true,false,true,false,true]}]}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${groqKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.65,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: `${systemPrompt || 'Anda adalah penyusun soal TKA profesional.'}${schemaInstruction}`,
+          },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error?.message || `Groq HTTP ${res.status}`);
+    }
+
+    const rawText = data?.choices?.[0]?.message?.content || '';
+    return parseJsonSafely(rawText);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -83,16 +133,17 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const apiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const geminiKeys = getGeminiApiKeys();
+  const groqKey = (process.env.GROQ_API_KEY || '').trim();
 
   if (req.method === 'GET') {
     return res.status(200).json({
       ok: true,
-      hasKey: Boolean(apiKey),
+      hasKey: geminiKeys.length > 0 || Boolean(groqKey),
+      geminiKeyCount: geminiKeys.length,
+      hasGroqFallback: Boolean(groqKey),
       activeModel: cachedWorkingModel,
-      message: apiKey
-        ? 'Server API Gemini TKA siap digunakan.'
-        : 'GEMINI_API_KEY belum diisi di Environment Variables Vercel.',
+      message: 'Server API TKA siap digunakan.',
     });
   }
 
@@ -100,7 +151,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: 'Metode tidak diizinkan.' });
   }
 
-  if (!apiKey) {
+  if (geminiKeys.length === 0 && !groqKey) {
     return res.status(500).json({
       ok: false,
       error: 'GEMINI_API_KEY belum dipasang di Environment Variables Vercel.',
@@ -115,97 +166,117 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: 'Prompt tidak boleh kosong.' });
     }
 
-    const triedModels = new Set();
-    // Hanya 5 model tercepat lintas keluarga (Gemini 2.5, Gemma 3, dan Gemini 3)
-    const queue = [
-      ...(cachedWorkingModel ? [cachedWorkingModel] : []),
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemma-3-27b-it',
-      'gemma-3-12b-it',
-      'gemini-3-flash-preview',
-    ];
-    let lastError = 'Gagal menghubungi layanan Gemini AI.';
+    let lastError = 'Gagal menghubungi layanan AI.';
     let lastStatus = 502;
 
-    while (queue.length > 0) {
-      const modelName = queue.shift();
-      if (!modelName || triedModels.has(modelName)) continue;
-      triedModels.add(modelName);
+    if (geminiKeys.length > 0) {
+      const baseModels = [
+        ...(cachedWorkingModel ? [cachedWorkingModel] : []),
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-3-flash-preview',
+        'gemma-3-27b-it',
+      ];
+      const uniqueModels = [...new Set(baseModels)];
 
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-      const controller = new AbortController();
-      // 9.5 detik per model: cukup untuk 1 soal (normal 2-4 detik), cepat pindah jika padat
-      const timeoutId = setTimeout(() => controller.abort(), 9500);
+      // Putar urutan API Key agar beban terbagi rata ke semua key yang dipasang
+      const rotatedKeys = geminiKeys.map(
+        (_, idx) => geminiKeys[(keyCursor + idx) % geminiKeys.length]
+      );
+      keyCursor = (keyCursor + 1) % geminiKeys.length;
 
-      try {
-        let googleRes = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify(
-            buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema, true)
-          ),
-        });
+      for (let kIdx = 0; kIdx < rotatedKeys.length; kIdx++) {
+        const currentKey = rotatedKeys[kIdx];
 
-        let data = await googleRes.json().catch(() => ({}));
+        for (const modelName of uniqueModels) {
+          const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(currentKey)}`;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 14000);
 
-        if (
-          !googleRes.ok &&
-          googleRes.status === 400 &&
-          String(data?.error?.message || '').toLowerCase().includes('thinking')
-        ) {
-          googleRes = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify(
-              buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema, false)
-            ),
-          });
-          data = await googleRes.json().catch(() => ({}));
-        }
+          try {
+            let googleRes = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: controller.signal,
+              body: JSON.stringify(
+                buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema, true)
+              ),
+            });
 
-        if (!googleRes.ok) {
-          lastStatus = googleRes.status;
-          lastError = data?.error?.message || `HTTP ${googleRes.status}`;
-          if (cachedWorkingModel === modelName) cachedWorkingModel = null;
+            let data = await googleRes.json().catch(() => ({}));
 
-          if (
-            googleRes.status === 400 ||
-            googleRes.status === 404 ||
-            googleRes.status === 429 ||
-            googleRes.status === 500 ||
-            googleRes.status === 502 ||
-            googleRes.status === 503 ||
-            googleRes.status === 504
-          ) {
-            continue;
+            if (
+              !googleRes.ok &&
+              googleRes.status === 400 &&
+              String(data?.error?.message || '').toLowerCase().includes('thinking')
+            ) {
+              googleRes = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify(
+                  buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema, false)
+                ),
+              });
+              data = await googleRes.json().catch(() => ({}));
+            }
+
+            if (!googleRes.ok) {
+              lastStatus = googleRes.status;
+              lastError = data?.error?.message || `HTTP ${googleRes.status}`;
+              if (cachedWorkingModel === modelName) cachedWorkingModel = null;
+
+              // Jika kuota API Key ini penuh (429), langsung lompat ke API Key berikutnya
+              if (googleRes.status === 429) {
+                break;
+              }
+              if (
+                googleRes.status === 400 ||
+                googleRes.status === 404 ||
+                googleRes.status === 500 ||
+                googleRes.status === 502 ||
+                googleRes.status === 503 ||
+                googleRes.status === 504
+              ) {
+                continue;
+              }
+            } else {
+              const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              const parsed = parseJsonSafely(rawText);
+              cachedWorkingModel = modelName;
+              console.log(`[api/gemini] Sukses menggunakan ${modelName} (Key #${kIdx + 1})`);
+              return res.status(200).json({ ok: true, model: modelName, result: parsed });
+            }
+          } catch (attemptErr) {
+            if (cachedWorkingModel === modelName) cachedWorkingModel = null;
+            lastStatus = attemptErr?.name === 'AbortError' ? 504 : 502;
+            lastError =
+              attemptErr?.name === 'AbortError'
+                ? `Model ${modelName} melebihi batas waktu tunggu.`
+                : attemptErr?.message || 'Koneksi ke Gemini terputus.';
+          } finally {
+            clearTimeout(timeoutId);
           }
-
-          console.error(`[api/gemini] Gagal (${googleRes.status}) pada ${modelName}:`, lastError);
-          return res.status(googleRes.status).json({ ok: false, error: lastError });
         }
-
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const parsed = parseJsonSafely(rawText);
-        cachedWorkingModel = modelName;
-        console.log(`[api/gemini] Sukses menggunakan model: ${modelName}`);
-        return res.status(200).json({ ok: true, model: modelName, result: parsed });
-      } catch (attemptErr) {
-        if (cachedWorkingModel === modelName) cachedWorkingModel = null;
-        lastStatus = attemptErr?.name === 'AbortError' ? 504 : 502;
-        lastError =
-          attemptErr?.name === 'AbortError'
-            ? `Model ${modelName} melebihi batas waktu tunggu.`
-            : attemptErr?.message || 'Koneksi ke Gemini terputus.';
-        continue;
-      } finally {
-        clearTimeout(timeoutId);
       }
     }
 
-    console.error(`[api/gemini] Semua model gagal (${lastStatus}):`, lastError);
+    // Cadangan otomatis ke Groq jika semua API Key Gemini terkena 429/503
+    if (groqKey) {
+      try {
+        const parsedGroq = await callGroqFallback(groqKey, systemPrompt, userPrompt);
+        console.log('[api/gemini] Sukses menggunakan cadangan Groq (llama-3.3-70b-versatile)');
+        return res.status(200).json({
+          ok: true,
+          model: 'groq/llama-3.3-70b-versatile',
+          result: parsedGroq,
+        });
+      } catch (groqErr) {
+        lastError = `Gemini & Groq gagal: ${groqErr?.message || lastError}`;
+      }
+    }
+
+    console.error(`[api/gemini] Semua penyedia gagal (${lastStatus}):`, lastError);
     return res.status(lastStatus).json({ ok: false, error: lastError });
   } catch (err) {
     console.error('[api/gemini] Server error:', err);
