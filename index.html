@@ -3652,7 +3652,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
               lastFallbackReason !== 'MISSING_API_KEY' &&
               lastFallbackReason !== 'INVALID_API_KEY'
             ) {
-              await pauseMs(800);
+              await pauseMs(3500);
               continue;
             }
             fallbackCountUsed += 1;
@@ -3750,7 +3750,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
       }
 
       // Jalankan 2 jalur paralel bersamaan agar 2x lebih cepat dan langsung tampil di tabel
-      const CONCURRENCY = Math.min(2, targetCount);
+      const CONCURRENCY = Math.min(1, targetCount);
       let nextIndexToProcess = 0;
       const workers = Array.from({ length: CONCURRENCY }, async (_, workerIdx) => {
         if (workerIdx > 0) await pauseMs(450);
