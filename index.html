@@ -3513,14 +3513,13 @@ function doPost(e) {
 ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 1. VALIDITAS ISI SESUAI TP (UU SISDIKNAS): Seluruh butir soal WAJIB mengukur kompetensi spesifik yang tertuang dalam Deskripsi Capaian Tujuan Pembelajaran (TP) pada mata pelajaran "${teacher.subject}". DILARANG membuat soal di luar topik TP atau soal generik.
 2. PENDEKATAN PEMBELAJARAN MENDALAM (DEEP LEARNING):
-   - Terapkan 3 Prinsip Pembelajaran Mendalam: Berkesadaran (Mindful), Bermakna (Meaningful), dan Menggembirakan (Joyful).
-   - Arahkan pada pengalaman belajar "${selectedDeepPhase}" dan penguatan dimensi profil lulusan "${selectedGradDim}".
+  - Terapkan 3 Prinsip Pembelajaran Mendalam: Berkesadaran (Mindful), Bermakna (Meaningful), dan Menggembirakan (Joyful).
+  - Arahkan pada pengalaman belajar "${selectedDeepPhase}" dan penguatan dimensi profil lulusan "${selectedGradDim}".
 3. STIMULUS KONTEKSTUAL FUNGSIONAL: Setiap butir soal WAJIB diawali stimulus kontekstual nyata yang benar-benar berfungsi untuk menjawab soal.
-4. LEVEL KOGNITIF HOTS (L2 & L3): Fokuskan seluruh butir soal pada Level Kognitif L2 (Aplikasi/C3) dan L3 (Penalaran/C4–C5).
-5. KEUNIKAN SKENARIO PER BUTIR: Setiap butir soal WAJIB memiliki studi kasus, angka, nama entitas, dan sudut pandang masalah yang unik.
-6. VARIASI BENTUK SOAL RESMI TKA: Variasikan bentuk soal secara proporsional antara "PG", "PG_KOMPLEKS", dan "BENAR_SALAH".
-7. KESETARAAN STRUKTUR KALIMAT & PANJANG TEKS ALAMI (EYD EDISI V): Pengecoh homogen, rasional, struktur paralel, panjang opsi seimbang (selisih <= 12%).
-8. SEBARAN KUNCI JAWABAN: Acak posisi kunci jawaban sehingga tersebar merata.`;
+4. LEVEL KOGNITIF HOTS (L2 & L3): Fokuskan butir soal pada Level Kognitif L2 (Aplikasi/C3) dan L3 (Penalaran/C4–C5).
+5. KEUNIKAN SKENARIO PER BUTIR: Wajib memiliki studi kasus, angka, nama entitas, dan sudut pandang masalah yang unik.
+6. KESETARAAN STRUKTUR KALIMAT & PANJANG TEKS ALAMI (EYD EDISI V): Pengecoh homogen, rasional, struktur paralel, panjang opsi seimbang (selisih <= 12%).
+7. SEBARAN KUNCI JAWABAN: Acak posisi kunci jawaban agar tidak monoton pada satu huruf.`;
 
       const responseSchema = {
         type: 'OBJECT',
@@ -3571,92 +3570,100 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
         required: ['items'],
       };
 
-      const BATCH_SIZE = 5;
-      let generatedItems = [];
+      const questionTypeCycle = ['PG', 'PG_KOMPLEKS', 'BENAR_SALAH'];
+      const cognitiveCycle = ['L2 - Aplikasi (C3)', 'L3 - Penalaran (C4)', 'L3 - Penalaran (C5)'];
+      const generatedItems = [];
       const usedTopicsSummary = [];
+      const batchPayloadItems = [];
       let fallbackCountUsed = 0;
       let lastFallbackReason = '';
 
-      while (generatedItems.length < targetCount) {
-        const remaining = targetCount - generatedItems.length;
-        const currentBatchSize = Math.min(BATCH_SIZE, remaining);
-        const batchNumber = Math.floor(generatedItems.length / BATCH_SIZE) + 1;
+      const existingBps = state.blueprints.filter((b) => isOwnedByTeacher(b, teacher));
+      let nextBpNumber =
+        existingBps.reduce((acc, b) => acc + Math.max(1, Number(b.questionCount) || 1), 0) + 1;
+      let nextQOrder = getNextQuestionOrder(teacher);
+      const weightPerItem = Math.max(1, Math.round(100 / targetCount));
+
+      const pauseMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      for (let i = 0; i < targetCount; i++) {
+        const preferredType = questionTypeCycle[i % questionTypeCycle.length];
+        const preferredCognitive = cognitiveCycle[i % cognitiveCycle.length];
+
+        if (i > 0) {
+          // Jeda singkat antar butir agar kuota RPM Google AI Studio tidak padat
+          await pauseMs(750);
+        }
 
         const antiRepeatInstruction =
           usedTopicsSummary.length > 0
-            ? `\n\nPENTING — LARANGAN PENGULANGAN SKENARIO (BATCH KE-${batchNumber}):\nButir-butir berikut SUDAH DIBUAT sebelumnya. Buat studi kasus dan subtopik yang 100% BARU:\n- ${usedTopicsSummary.join('\n- ')}`
+            ? `\n\nPENTING — LARANGAN PENGULANGAN SKENARIO (BUTIR KE-${i + 1} DARI ${targetCount}):\nButir-butir berikut SUDAH TAMPIL DI TABEL. Gunakan studi kasus, angka, dan konteks masalah yang 100% BERBEDA:\n- ${usedTopicsSummary.join('\n- ')}`
             : '';
 
-        const userPrompt = `Susun paket lengkap sebanyak ${currentBatchSize} butir Kisi-Kisi Pembelajaran Mendalam dan ${currentBatchSize} butir Soal TKA yang UNIK dan BERBEDA satu sama lain untuk:
+        const userPrompt = `Susun tepat 1 butir Kisi-Kisi Pembelajaran Mendalam dan 1 butir Soal TKA yang UNIK dan tajam untuk:
 - Mata Pelajaran: ${teacher.subject}
 - Kode TP: ${tpRecord.code}
 - Fase / Kelas: ${tpRecord.phase}
 - Pengalaman Belajar Mendalam Utama: ${selectedDeepPhase}
 - Dimensi Profil Lulusan: ${selectedGradDim}
 - Deskripsi Capaian TP: ${tpRecord.description}
-- KKTP Minimal: ${tpRecord.kktp}${antiRepeatInstruction}`;
+- KKTP Minimal: ${tpRecord.kktp}
+- Bentuk Soal Wajib untuk Butir Ini: ${preferredType}
+- Target Level Kognitif: ${preferredCognitive}${antiRepeatInstruction}`;
 
-        try {
-          const aiResult = await callGeminiTkaJson(systemPrompt, userPrompt, responseSchema);
-          if (aiResult && Array.isArray(aiResult.items) && aiResult.items.length > 0) {
-            const batchNormalized = aiResult.items.slice(0, currentBatchSize).map((raw) => {
+        let normalizedItem = null;
+        let attempt = 0;
+
+        while (attempt < 2 && !normalizedItem) {
+          attempt++;
+          try {
+            const aiResult = await callGeminiTkaJson(systemPrompt, userPrompt, responseSchema);
+            if (aiResult && Array.isArray(aiResult.items) && aiResult.items.length > 0) {
+              const raw = aiResult.items[0];
               const qType =
                 raw.questionType === 'PG_KOMPLEKS' || raw.questionType === 'BENAR_SALAH'
                   ? raw.questionType
-                  : 'PG';
+                  : preferredType;
               const harmonizedOpts = harmonizeGeneratedOptions(raw.options || []);
               usedTopicsSummary.push(
                 `${raw.material || 'Materi'}: ${String(raw.questionText || '').replace(/\s+/g, ' ').slice(0, 95)}...`
               );
-              return {
+              normalizedItem = {
                 ...raw,
                 deepLearningPhase: raw.deepLearningPhase || selectedDeepPhase,
                 graduateDimension: raw.graduateDimension || selectedGradDim,
+                cognitiveLevel: raw.cognitiveLevel || preferredCognitive,
                 questionType: qType,
                 options: harmonizedOpts,
               };
-            });
-            generatedItems.push(...batchNormalized);
-          } else {
-            throw new Error('Format output AI tidak memuat daftar butir soal.');
+            } else {
+              throw new Error('Format output AI tidak memuat butir soal.');
+            }
+          } catch (err) {
+            lastFallbackReason = err?.message || '';
+            if (
+              attempt < 2 &&
+              lastFallbackReason !== 'MISSING_API_KEY' &&
+              lastFallbackReason !== 'INVALID_API_KEY'
+            ) {
+              await pauseMs(1200);
+              continue;
+            }
+            fallbackCountUsed += 1;
+            const fallbackSlice = buildFallbackTkaBundle(teacher, tpRecord, 1, i);
+            normalizedItem = fallbackSlice[0];
+            usedTopicsSummary.push(
+              `${normalizedItem.material}: ${String(normalizedItem.questionText || '').slice(0, 80)}...`
+            );
           }
-        } catch (err) {
-          lastFallbackReason = err?.message || '';
-          fallbackCountUsed += currentBatchSize;
-          const fallbackSlice = buildFallbackTkaBundle(
-            teacher,
-            tpRecord,
-            currentBatchSize,
-            generatedItems.length
-          );
-          fallbackSlice.forEach((fb) => {
-            usedTopicsSummary.push(`${fb.material}: ${String(fb.questionText || '').slice(0, 80)}...`);
-          });
-          generatedItems.push(...fallbackSlice);
         }
-      }
 
-      if (fallbackCountUsed > 0) {
-        const reasonMessage =
-          lastFallbackReason === 'MISSING_API_KEY'
-            ? `API Key Gemini AI belum dipasang oleh Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan bank templat standar BSKAP sesuai TP.`
-            : lastFallbackReason === 'INVALID_API_KEY'
-            ? `API Key Gemini AI tidak valid atau kedaluwarsa. Periksa kembali API Key di menu Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan templat standar.`
-            : `Sebagian soal (${fallbackCountUsed} butir) disusun menggunakan bank templat terstandar sesuai TP karena koneksi/kuota API sedang padat.`;
-        showToast(reasonMessage, 'warning', 'Info Generator');
-      }
+        // Seimbangkan sebaran kunci jawaban secara bertahap bersama butir sebelumnya
+        const balancedList = distributeGeneratedOptionKeys([...generatedItems, normalizedItem]);
+        const item = balancedList[balancedList.length - 1];
+        generatedItems.push(item);
 
-      generatedItems = distributeGeneratedOptionKeys(generatedItems.slice(0, targetCount));
-
-      const existingBps = state.blueprints.filter((b) => isOwnedByTeacher(b, teacher));
-      let nextBpNumber = existingBps.reduce((acc, b) => acc + Math.max(1, Number(b.questionCount) || 1), 0) + 1;
-      let nextQOrder = getNextQuestionOrder(teacher);
-      const weightPerItem = Math.max(1, Math.round(100 / generatedItems.length));
-
-      const batchPayloadItems = [];
-
-      for (let i = 0; i < generatedItems.length; i++) {
-        const item = generatedItems[i];
+        // Langsung simpan dan tampilkan butir ke-i di tabel tanpa menunggu paket selesai
         const bpId = `blueprints_${Date.now()}_${i}_${Math.floor(Math.random() * 9000)}`;
         const bpRecord = {
           id: bpId,
@@ -3669,8 +3676,10 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           deepLearningPhase: item.deepLearningPhase || selectedDeepPhase,
           graduateDimension: item.graduateDimension || selectedGradDim,
           material: item.material || `Materi Esensial ${tpRecord.code}`,
-          indicator: item.indicator || `Disajikan stimulus kontekstual, peserta didik dapat memecahkan masalah terkait ${tpRecord.code}.`,
-          cognitiveLevel: item.cognitiveLevel || 'L2 - Aplikasi (C3)',
+          indicator:
+            item.indicator ||
+            `Disajikan stimulus kontekstual, peserta didik dapat memecahkan masalah terkait ${tpRecord.code}.`,
+          cognitiveLevel: item.cognitiveLevel || preferredCognitive,
           questionType: item.questionType,
           stimulusType: item.stimulusType || 'Studi Kasus Kontekstual',
           createdAt: new Date().toISOString(),
@@ -3729,6 +3738,21 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 
         state.questions.push(normalizeQuestionRecord(rawQuestionRecord));
         batchPayloadItems.push({ table: 'questions', data: rawQuestionRecord });
+
+        saveLocalBackupDb();
+        try {
+          if (typeof renderApp === 'function') renderApp();
+        } catch {}
+      }
+
+      if (fallbackCountUsed > 0) {
+        const reasonMessage =
+          lastFallbackReason === 'MISSING_API_KEY'
+            ? `API Key Gemini AI belum dipasang oleh Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan bank templat standar BSKAP sesuai TP.`
+            : lastFallbackReason === 'INVALID_API_KEY'
+            ? `API Key Gemini AI tidak valid atau kedaluwarsa. Periksa kembali API Key di menu Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan templat standar.`
+            : `Sebagian soal (${fallbackCountUsed} butir) disusun menggunakan bank templat terstandar sesuai TP karena koneksi/kuota API sedang padat.`;
+        showToast(reasonMessage, 'warning', 'Info Generator');
       }
 
       const updatedTotalQuestions = state.questions.filter((q) => isOwnedByTeacher(q, teacher)).length;
