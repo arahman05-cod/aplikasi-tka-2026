@@ -20,56 +20,6 @@ function parseJsonSafely(rawText) {
   }
 }
 
-async function discoverActiveModels(apiKey) {
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
-    );
-    if (!res.ok) return [];
-    const data = await res.json();
-    const models = Array.isArray(data?.models) ? data.models : [];
-
-    return models
-      .filter((m) => {
-        const methods = Array.isArray(m.supportedGenerationMethods)
-          ? m.supportedGenerationMethods
-          : [];
-        const name = String(m.name || '').toLowerCase();
-        return (
-          methods.includes('generateContent') &&
-          (name.includes('gemini') || name.includes('gemma-3')) &&
-          !name.includes('image') &&
-          !name.includes('audio') &&
-          !name.includes('live') &&
-          !name.includes('embedding') &&
-          !name.includes('imagen') &&
-          !name.includes('veo') &&
-          !name.includes('tts') &&
-          !name.includes('aqa') &&
-          !name.includes('robotics') &&
-          !name.includes('computer-use') &&
-          !name.includes('deep-research')
-        );
-      })
-      .map((m) => String(m.name).replace(/^models\//, ''))
-      .sort((a, b) => {
-        const score = (n) => {
-          let s = 0;
-          if (n.includes('3-flash')) s += 35;
-          if (n.includes('2.5-flash')) s += 30;
-          if (n.includes('flash')) s += 20;
-          if (n.includes('gemma-3-27b')) s += 15;
-          if (n.includes('gemma-3-12b')) s += 12;
-          if (n.includes('-pro')) s -= 5;
-          return s;
-        };
-        return score(b) - score(a);
-      });
-  } catch {
-    return [];
-  }
-}
-
 function buildPayloadForModel(
   modelName,
   systemPrompt,
@@ -79,13 +29,15 @@ function buildPayloadForModel(
 ) {
   const lower = modelName.toLowerCase();
   const isGemma = lower.includes('gemma');
+  const speedDirective =
+    '\n\nATURAN KECEPATAN: Susun konten secara tajam, langsung ke inti HOTS, dan padat tanpa kalimat basa-basi.';
 
   if (isGemma) {
     const schemaHint = responseSchema
       ? `\n\nStruktur JSON WAJIB mengikuti skema berikut:\n${JSON.stringify(responseSchema)}`
       : '';
     const mergedText = [
-      systemPrompt ? `INSTRUKSI SISTEM:\n${systemPrompt}` : '',
+      systemPrompt ? `INSTRUKSI SISTEM:\n${systemPrompt}${speedDirective}` : speedDirective,
       `TUGAS:\n${userPrompt}${schemaHint}\n\nPENTING: Jawab HANYA dengan objek JSON valid tanpa teks pengantar, penutup, atau blok markdown.`,
     ]
       .filter(Boolean)
@@ -94,29 +46,30 @@ function buildPayloadForModel(
     return {
       contents: [{ role: 'user', parts: [{ text: mergedText }] }],
       generationConfig: {
-        temperature: 0.7,
+        temperature: 0.65,
       },
     };
   }
 
   const generationConfig = {
-    temperature: 0.7,
+    temperature: 0.65,
     responseMimeType: 'application/json',
     responseSchema: responseSchema || undefined,
   };
 
-  // Matikan jeda berpikir panjang pada Gemini 3 Flash & Gemini 2.5 Flash
   if (fastMode) {
-    if (lower.includes('gemini-3')) {
-      generationConfig.thinkingConfig = { thinkingLevel: 'minimal' };
-    } else if (lower.includes('2.5-flash')) {
+    if (lower.includes('2.5-flash')) {
       generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    } else if (lower.includes('gemini-3')) {
+      generationConfig.thinkingConfig = { thinkingLevel: 'minimal' };
     }
   }
 
   return {
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-    systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+    systemInstruction: {
+      parts: [{ text: `${systemPrompt || 'Anda adalah penyusun soal TKA profesional.'}${speedDirective}` }],
+    },
     generationConfig,
   };
 }
@@ -163,26 +116,27 @@ export default async function handler(req, res) {
     }
 
     const triedModels = new Set();
+    // Hanya 5 model tercepat lintas keluarga (Gemini 2.5, Gemma 3, dan Gemini 3)
     const queue = [
       ...(cachedWorkingModel ? [cachedWorkingModel] : []),
-      'gemini-3-flash-preview',
       'gemini-2.5-flash',
-      'gemini-flash-latest',
+      'gemini-2.5-flash-lite',
       'gemma-3-27b-it',
       'gemma-3-12b-it',
+      'gemini-3-flash-preview',
     ];
-    let hasDiscovered = false;
     let lastError = 'Gagal menghubungi layanan Gemini AI.';
     let lastStatus = 502;
 
-    while (queue.length > 0 && triedModels.size < 8) {
+    while (queue.length > 0) {
       const modelName = queue.shift();
       if (!modelName || triedModels.has(modelName)) continue;
       triedModels.add(modelName);
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      // 9.5 detik per model: cukup untuk 1 soal (normal 2-4 detik), cepat pindah jika padat
+      const timeoutId = setTimeout(() => controller.abort(), 9500);
 
       try {
         let googleRes = await fetch(endpoint, {
@@ -196,7 +150,6 @@ export default async function handler(req, res) {
 
         let data = await googleRes.json().catch(() => ({}));
 
-        // Jika parameter thinkingConfig ditolak (400), ulangi langsung tanpa fastMode
         if (
           !googleRes.ok &&
           googleRes.status === 400 &&
@@ -217,14 +170,6 @@ export default async function handler(req, res) {
           lastStatus = googleRes.status;
           lastError = data?.error?.message || `HTTP ${googleRes.status}`;
           if (cachedWorkingModel === modelName) cachedWorkingModel = null;
-
-          if (!hasDiscovered) {
-            hasDiscovered = true;
-            const activeModels = await discoverActiveModels(apiKey);
-            activeModels.forEach((m) => {
-              if (!triedModels.has(m)) queue.push(m);
-            });
-          }
 
           if (
             googleRes.status === 400 ||
@@ -254,7 +199,6 @@ export default async function handler(req, res) {
           attemptErr?.name === 'AbortError'
             ? `Model ${modelName} melebihi batas waktu tunggu.`
             : attemptErr?.message || 'Koneksi ke Gemini terputus.';
-        // Lanjut ke model cadangan berikutnya (jangan berhenti di tengah antrean)
         continue;
       } finally {
         clearTimeout(timeoutId);
