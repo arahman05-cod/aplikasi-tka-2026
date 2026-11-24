@@ -1194,19 +1194,55 @@ function doPost(e) {
     }
 
     async function callGeminiTkaJson(systemPrompt, userPrompt, responseSchema) {
-      const apiKey = getStoredGeminiApiKey();
-      if (!apiKey) {
-        throw new Error('MISSING_API_KEY');
+      let serverErrorMessage = '';
+
+      // 1. Panggil Server Vercel (/api/gemini) — aktif di semua perangkat & mode Samaran
+      if (window.location.protocol.startsWith('http')) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 35000);
+          const serverRes = await fetch('/api/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({ systemPrompt, userPrompt, responseSchema }),
+          });
+          clearTimeout(timeoutId);
+
+          const contentType = serverRes.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const serverData = await serverRes.json();
+            if (serverRes.ok && serverData && serverData.ok && serverData.result) {
+              return serverData.result;
+            }
+            if (serverData && serverData.error) {
+              serverErrorMessage = serverData.error;
+            }
+          } else {
+            serverErrorMessage = `Server /api/gemini merespons HTTP ${serverRes.status}`;
+          }
+        } catch (netErr) {
+          serverErrorMessage = netErr?.message || 'Gagal menjangkau /api/gemini';
+        }
       }
 
-      const models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      // 2. Cadangan: Panggil langsung menggunakan API Key lokal browser jika tersedia
+      const apiKey = getStoredGeminiApiKey();
+      if (!apiKey) {
+        throw new Error(
+          serverErrorMessage ||
+            'API Key Gemini belum terpasang di Vercel (GEMINI_API_KEY) maupun pengaturan lokal.'
+        );
+      }
+
+      const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
       let lastErr = null;
 
       for (let mIdx = 0; mIdx < models.length; mIdx++) {
         const modelName = models[mIdx];
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 32000);
+        const timeoutId = setTimeout(() => controller.abort(), 28000);
 
         try {
           const res = await fetch(endpoint, {
@@ -1224,16 +1260,9 @@ function doPost(e) {
             }),
           });
           if (!res.ok) {
-            const errText = await res.text().catch(() => '');
-            if ((res.status === 400 || res.status === 403) && /API_KEY_INVALID|API key not valid|permission/i.test(errText)) {
-              throw new Error('INVALID_API_KEY');
-            }
-            if (res.status === 429) {
-              lastErr = new Error('RATE_LIMIT');
-            } else {
-              lastErr = new Error(`HTTP_${res.status}`);
-            }
-            if (mIdx < models.length - 1) continue;
+            const errJson = await res.json().catch(() => ({}));
+            lastErr = new Error(errJson?.error?.message || `HTTP ${res.status}`);
+            if (res.status === 404 && mIdx < models.length - 1) continue;
             throw lastErr;
           }
           const data = await res.json();
@@ -1241,7 +1270,6 @@ function doPost(e) {
           return typeof rawText === 'string' ? JSON.parse(rawText) : rawText;
         } catch (err) {
           lastErr = err;
-          if (err?.message === 'INVALID_API_KEY') throw err;
           if (mIdx === models.length - 1) throw lastErr;
         } finally {
           clearTimeout(timeoutId);
