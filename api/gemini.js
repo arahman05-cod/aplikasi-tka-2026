@@ -55,8 +55,8 @@ async function discoverActiveModels(apiKey) {
       .sort((a, b) => {
         const score = (n) => {
           let s = 0;
-          if (n.includes('3-flash')) s += 35;
-          if (n.includes('2.5-flash')) s += 30;
+          if (n.includes('2.5-flash')) s += 35;
+          if (n.includes('3-flash')) s += 30;
           if (n.includes('flash')) s += 20;
           if (n.includes('gemma-3-12b')) s += 15;
           if (n.includes('gemma-3-27b')) s += 12;
@@ -72,7 +72,8 @@ async function discoverActiveModels(apiKey) {
 }
 
 function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema) {
-  const isGemma = modelName.toLowerCase().includes('gemma');
+  const lower = modelName.toLowerCase();
+  const isGemma = lower.includes('gemma');
 
   if (isGemma) {
     const schemaHint = responseSchema
@@ -93,14 +94,21 @@ function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchem
     };
   }
 
+  const generationConfig = {
+    temperature: 0.7,
+    responseMimeType: 'application/json',
+    responseSchema: responseSchema || undefined,
+  };
+
+  // Mempercepat pembuatan 5-10 soal sekaligus tanpa jeda thinking internal
+  if (lower.includes('2.5-flash')) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
+
   return {
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
     systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-    generationConfig: {
-      temperature: 0.7,
-      responseMimeType: 'application/json',
-      responseSchema: responseSchema || undefined,
-    },
+    generationConfig,
   };
 }
 
@@ -159,14 +167,15 @@ export default async function handler(req, res) {
     let lastError = 'Gagal menghubungi layanan Gemini AI.';
     let lastStatus = 502;
 
-    while (queue.length > 0 && triedModels.size < 12) {
+    while (queue.length > 0 && triedModels.size < 8) {
       const modelName = queue.shift();
       if (!modelName || triedModels.has(modelName)) continue;
       triedModels.add(modelName);
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 16000);
+      // Batas waktu 45 detik agar cukup untuk menyusun 5-10 soal sekaligus
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
 
       try {
         const googleRes = await fetch(endpoint, {
@@ -216,18 +225,12 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, model: modelName, result: parsed });
       } catch (attemptErr) {
         if (cachedWorkingModel === modelName) cachedWorkingModel = null;
-        if (!hasDiscovered) {
-          hasDiscovered = true;
-          const activeModels = await discoverActiveModels(apiKey);
-          activeModels.forEach((m) => {
-            if (!triedModels.has(m)) queue.push(m);
-          });
-        }
         lastStatus = attemptErr?.name === 'AbortError' ? 504 : 502;
         lastError =
           attemptErr?.name === 'AbortError'
             ? `Model ${modelName} melebihi batas waktu tunggu.`
             : attemptErr?.message || 'Koneksi ke Gemini terputus.';
+        if (attemptErr?.name === 'AbortError') break;
         continue;
       } finally {
         clearTimeout(timeoutId);
