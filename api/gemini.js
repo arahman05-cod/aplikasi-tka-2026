@@ -55,12 +55,11 @@ async function discoverActiveModels(apiKey) {
       .sort((a, b) => {
         const score = (n) => {
           let s = 0;
-          if (n.includes('2.5-flash')) s += 35;
-          if (n.includes('3-flash')) s += 30;
+          if (n.includes('3-flash')) s += 35;
+          if (n.includes('2.5-flash')) s += 30;
           if (n.includes('flash')) s += 20;
-          if (n.includes('gemma-3-12b')) s += 15;
-          if (n.includes('gemma-3-27b')) s += 12;
-          if (n.includes('gemma-3')) s += 8;
+          if (n.includes('gemma-3-27b')) s += 15;
+          if (n.includes('gemma-3-12b')) s += 12;
           if (n.includes('-pro')) s -= 5;
           return s;
         };
@@ -71,7 +70,13 @@ async function discoverActiveModels(apiKey) {
   }
 }
 
-function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema) {
+function buildPayloadForModel(
+  modelName,
+  systemPrompt,
+  userPrompt,
+  responseSchema,
+  fastMode = true
+) {
   const lower = modelName.toLowerCase();
   const isGemma = lower.includes('gemma');
 
@@ -100,9 +105,13 @@ function buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchem
     responseSchema: responseSchema || undefined,
   };
 
-  // Mempercepat pembuatan 5-10 soal sekaligus tanpa jeda thinking internal
-  if (lower.includes('2.5-flash')) {
-    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  // Matikan jeda berpikir panjang pada Gemini 3 Flash & Gemini 2.5 Flash
+  if (fastMode) {
+    if (lower.includes('gemini-3')) {
+      generationConfig.thinkingConfig = { thinkingLevel: 'minimal' };
+    } else if (lower.includes('2.5-flash')) {
+      generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    }
   }
 
   return {
@@ -156,12 +165,11 @@ export default async function handler(req, res) {
     const triedModels = new Set();
     const queue = [
       ...(cachedWorkingModel ? [cachedWorkingModel] : []),
-      'gemini-2.5-flash',
       'gemini-3-flash-preview',
+      'gemini-2.5-flash',
       'gemini-flash-latest',
-      'gemini-2.5-flash-lite',
-      'gemma-3-12b-it',
       'gemma-3-27b-it',
+      'gemma-3-12b-it',
     ];
     let hasDiscovered = false;
     let lastError = 'Gagal menghubungi layanan Gemini AI.';
@@ -174,20 +182,36 @@ export default async function handler(req, res) {
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const controller = new AbortController();
-      // Batas waktu 45 detik agar cukup untuk menyusun 5-10 soal sekaligus
-      const timeoutId = setTimeout(() => controller.abort(), 45000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       try {
-        const googleRes = await fetch(endpoint, {
+        let googleRes = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
           body: JSON.stringify(
-            buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema)
+            buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema, true)
           ),
         });
 
-        const data = await googleRes.json().catch(() => ({}));
+        let data = await googleRes.json().catch(() => ({}));
+
+        // Jika parameter thinkingConfig ditolak (400), ulangi langsung tanpa fastMode
+        if (
+          !googleRes.ok &&
+          googleRes.status === 400 &&
+          String(data?.error?.message || '').toLowerCase().includes('thinking')
+        ) {
+          googleRes = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify(
+              buildPayloadForModel(modelName, systemPrompt, userPrompt, responseSchema, false)
+            ),
+          });
+          data = await googleRes.json().catch(() => ({}));
+        }
 
         if (!googleRes.ok) {
           lastStatus = googleRes.status;
@@ -230,7 +254,7 @@ export default async function handler(req, res) {
           attemptErr?.name === 'AbortError'
             ? `Model ${modelName} melebihi batas waktu tunggu.`
             : attemptErr?.message || 'Koneksi ke Gemini terputus.';
-        if (attemptErr?.name === 'AbortError') break;
+        // Lanjut ke model cadangan berikutnya (jangan berhenti di tengah antrean)
         continue;
       } finally {
         clearTimeout(timeoutId);
