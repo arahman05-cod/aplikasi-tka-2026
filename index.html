@@ -3572,6 +3572,14 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 
       const questionTypeCycle = ['PG', 'PG_KOMPLEKS', 'BENAR_SALAH'];
       const cognitiveCycle = ['L2 - Aplikasi (C3)', 'L3 - Penalaran (C4)', 'L3 - Penalaran (C5)'];
+      const angleCycle = [
+        'studi kasus penerapan langsung di dunia nyata',
+        'analisis data kuantitatif atau evaluasi prosedur',
+        'pemecahan masalah komparatif antara dua kondisi',
+        'identifikasi kekeliruan konsep dan langkah perbaikannya',
+        'simulasi pengambilan keputusan berbasis bukti kontekstual',
+      ];
+
       const generatedItems = [];
       const usedTopicsSummary = [];
       const batchPayloadItems = [];
@@ -3586,18 +3594,14 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 
       const pauseMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-      for (let i = 0; i < targetCount; i++) {
+      async function processSingleQuestion(i) {
         const preferredType = questionTypeCycle[i % questionTypeCycle.length];
         const preferredCognitive = cognitiveCycle[i % cognitiveCycle.length];
-
-        if (i > 0) {
-          // Jeda singkat antar butir agar kuota RPM Google AI Studio tidak padat
-          await pauseMs(750);
-        }
+        const preferredAngle = angleCycle[i % angleCycle.length];
 
         const antiRepeatInstruction =
           usedTopicsSummary.length > 0
-            ? `\n\nPENTING — LARANGAN PENGULANGAN SKENARIO (BUTIR KE-${i + 1} DARI ${targetCount}):\nButir-butir berikut SUDAH TAMPIL DI TABEL. Gunakan studi kasus, angka, dan konteks masalah yang 100% BERBEDA:\n- ${usedTopicsSummary.join('\n- ')}`
+            ? `\n\nPENTING — LARANGAN PENGULANGAN SKENARIO (BUTIR KE-${i + 1}):\nButir berikut sudah dibuat. Gunakan studi kasus, angka, dan konteks yang 100% BERBEDA:\n- ${usedTopicsSummary.slice(-4).join('\n- ')}`
             : '';
 
         const userPrompt = `Susun tepat 1 butir Kisi-Kisi Pembelajaran Mendalam dan 1 butir Soal TKA yang UNIK dan tajam untuk:
@@ -3609,12 +3613,14 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 - Deskripsi Capaian TP: ${tpRecord.description}
 - KKTP Minimal: ${tpRecord.kktp}
 - Bentuk Soal Wajib untuk Butir Ini: ${preferredType}
-- Target Level Kognitif: ${preferredCognitive}${antiRepeatInstruction}`;
+- Target Level Kognitif: ${preferredCognitive}
+- Sudut Pandang Stimulus Khusus Butir Ini: ${preferredAngle}${antiRepeatInstruction}`;
 
         let normalizedItem = null;
         let attempt = 0;
 
-        while (attempt < 4 && !normalizedItem) {
+        // Maksimal 2 percobaan per butir karena /api/gemini sudah mencoba 5 model otomatis
+        while (attempt < 2 && !normalizedItem) {
           attempt++;
           try {
             const aiResult = await callGeminiTkaJson(systemPrompt, userPrompt, responseSchema);
@@ -3642,11 +3648,11 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           } catch (err) {
             lastFallbackReason = err?.message || '';
             if (
-              attempt < 4 &&
+              attempt < 2 &&
               lastFallbackReason !== 'MISSING_API_KEY' &&
               lastFallbackReason !== 'INVALID_API_KEY'
             ) {
-              await pauseMs(1500 * attempt);
+              await pauseMs(800);
               continue;
             }
             fallbackCountUsed += 1;
@@ -3658,12 +3664,10 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           }
         }
 
-        // Seimbangkan sebaran kunci jawaban secara bertahap bersama butir sebelumnya
         const balancedList = distributeGeneratedOptionKeys([...generatedItems, normalizedItem]);
         const item = balancedList[balancedList.length - 1];
         generatedItems.push(item);
 
-        // Langsung simpan dan tampilkan butir ke-i di tabel tanpa menunggu paket selesai
         const bpId = `blueprints_${Date.now()}_${i}_${Math.floor(Math.random() * 9000)}`;
         const bpRecord = {
           id: bpId,
@@ -3744,6 +3748,20 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           if (typeof renderApp === 'function') renderApp();
         } catch {}
       }
+
+      // Jalankan 2 jalur paralel bersamaan agar 2x lebih cepat dan langsung tampil di tabel
+      const CONCURRENCY = Math.min(2, targetCount);
+      let nextIndexToProcess = 0;
+      const workers = Array.from({ length: CONCURRENCY }, async (_, workerIdx) => {
+        if (workerIdx > 0) await pauseMs(450);
+        while (true) {
+          const currentIndex = nextIndexToProcess++;
+          if (currentIndex >= targetCount) break;
+          await processSingleQuestion(currentIndex);
+        }
+      });
+
+      await Promise.all(workers);
 
       if (fallbackCountUsed > 0) {
         const reasonMessage =
