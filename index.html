@@ -3670,6 +3670,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
                 graduateDimension: raw.graduateDimension || selectedGradDim,
                 questionType: qType,
                 options: harmonizedOpts,
+                generationSource: 'GEMINI',
               };
             });
             generatedItems.push(...batchNormalized);
@@ -3688,7 +3689,9 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
           fallbackSlice.forEach((fb) => {
             usedTopicsSummary.push(`${fb.material}: ${String(fb.questionText || '').slice(0, 80)}...`);
           });
-          generatedItems.push(...fallbackSlice);
+          generatedItems.push(
+          ...fallbackSlice.map((fb) => ({ ...fb, generationSource: 'FALLBACK' }))
+        );
         }
       }
 
@@ -3770,6 +3773,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
         });
 
         const qId = `questions_${Date.now()}_${i}_${Math.floor(Math.random() * 9000)}`;
+        localAudit.generationSource = item.generationSource || 'GEMINI';
         const rawQuestionRecord = {
           id: qId,
           teacherId: teacher.id,
@@ -6893,6 +6897,20 @@ Berikan penilaian OBJEKTIF dan KRITIS:
                             <span class="px-2 py-0.5 rounded bg-sky-100 text-[#002b7a] font-bold">${escapeHtml(q.type)}</span>
                             <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-bold">${escapeHtml(q.tpCode || 'TP.1')} • Bobot ${q.weight}</span>
                             <span class="px-2 py-0.5 rounded-full font-bold ${badgeColor}">Kelayakan TKA: ${score}%</span>
+                            ${(() => {
+                    let src = '';
+                    try {
+                      const parsed = typeof q.analysisJson === 'string' ? JSON.parse(q.analysisJson) : (q.analysis || {});
+                      src = parsed?.generationSource || '';
+                    } catch (e) {}
+                    if (src === 'FALLBACK') {
+                      return '<span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">Sistem Cadangan</span>';
+                    }
+                    if (src === 'GEMINI') {
+                      return '<span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-bold">AI Gemini</span>';
+                    }
+                    return '';
+                  })()}
                           </div>
                           <div class="flex items-center gap-1">
                             <button type="button" ${isFirst ? 'disabled' : ''} onclick="handleMoveQuestionOrder('${q.id}', 'up')" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-35 text-slate-700 font-extrabold" title="Pindah ke atas">↑</button>
