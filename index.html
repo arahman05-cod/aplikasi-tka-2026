@@ -3543,23 +3543,17 @@ function getTodayDateKey() {
 
     async function generateAndSaveTkaBundleForTp(teacher, tpRecord, count = 5) {
       const quotaInfo = getTeacherDailyQuotaInfo(teacher);
-      if (!quotaInfo.isUnlimited) {
-        if (quotaInfo.remaining <= 0) {
-          showToast(
-            `Kuota harian Anda sudah habis (${quotaInfo.usedToday}/${quotaInfo.limit} soal hari ini). Silakan lanjutkan besok atau hubungi Proktor Utama.`,
-            'warning',
-            'Batas Harian Tercapai'
-          );
-          return 0;
-        }
-        if (Number(count) > quotaInfo.remaining) {
-          showToast(
-            `Sisa kuota harian Anda tinggal ${quotaInfo.remaining} soal (dari batas ${quotaInfo.limit} soal/hari). Sistem menyesuaikan jumlah pembuatan menjadi ${quotaInfo.remaining} butir.`,
-            'info',
-            'Penyesuaian Kuota Harian'
-          );
-          count = quotaInfo.remaining;
-        }
+      const requestedCount = Math.max(1, Math.min(30, Number(count) || 5));
+      const useBackupGenerator =
+        !quotaInfo.isUnlimited &&
+        (quotaInfo.remaining <= 0 || requestedCount > quotaInfo.remaining);
+
+      if (useBackupGenerator) {
+        showToast(
+          `Permintaan ${requestedCount} soal melebihi sisa kuota API harian Anda (${quotaInfo.remaining}/${quotaInfo.limit} soal). Sistem otomatis beralih ke generator cadangan lokal tanpa menggunakan kuota API Key.`,
+          'info',
+          'Mode Generator Cadangan Aktif'
+        );
       }
       const targetCount = Math.max(1, Math.min(30, Number(count) || 5));
       const selectedDeepPhase = tpRecord.deepLearningPhase || DEEP_LEARNING_EXPERIENCES[1];
@@ -3658,6 +3652,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 - KKTP Minimal: ${tpRecord.kktp}${antiRepeatInstruction}`;
 
         try {
+         if (useBackupGenerator) throw new Error('DAILY_QUOTA_BACKUP_MODE');
           const aiResult = await callGeminiTkaJson(systemPrompt, userPrompt, responseSchema);
           if (aiResult && Array.isArray(aiResult.items) && aiResult.items.length > 0) {
             const batchNormalized = aiResult.items.slice(0, currentBatchSize).map((raw) => {
@@ -3699,6 +3694,9 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 
       if (fallbackCountUsed > 0) {
         const reasonMessage =
+         lastFallbackReason === 'DAILY_QUOTA_BACKUP_MODE'
+            ? `Batas kuota API harian dari Proktor Utama telah tercapai. ${fallbackCountUsed} butir soal disusun otomatis menggunakan sistem cadangan (bank templat standar BSKAP sesuai TP) tanpa menggunakan kuota API Key.`
+            :
           lastFallbackReason === 'MISSING_API_KEY'
             ? `API Key Gemini AI belum dipasang oleh Proktor Utama. ${fallbackCountUsed} butir soal disusun menggunakan bank templat standar BSKAP sesuai TP.`
             : lastFallbackReason === 'INVALID_API_KEY'
