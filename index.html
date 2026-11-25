@@ -1093,7 +1093,49 @@ function doPost(e) {
       const tTok = String(teacher.token || '').trim().toUpperCase();
       return Boolean(rTok && tTok && rTok === tTok);
     }
+function getTodayDateKey() {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
 
+    function getTeacherDailyQuotaInfo(teacher) {
+      const limit = Math.max(0, Number(teacher?.dailyQuestionLimit ?? 20) || 0);
+      const today = getTodayDateKey();
+      const usedToday = state.questions.filter((q) => {
+        if (!isOwnedByTeacher(q, teacher)) return false;
+        const created = String(q.createdAt || '').slice(0, 10);
+        return created === today;
+      }).length;
+      const remaining = limit === 0 ? Infinity : Math.max(0, limit - usedToday);
+      return { limit, usedToday, remaining, isUnlimited: limit === 0 };
+    }
+
+    async function updateTeacherDailyLimit(teacherId, newLimitRaw) {
+      const idx = state.teachers.findIndex((t) => t.id === teacherId);
+      if (idx < 0) return;
+      const parsedLimit = Math.max(0, Math.min(500, parseInt(newLimitRaw, 10) || 0));
+      const updatedTeacher = {
+        ...state.teachers[idx],
+        dailyQuestionLimit: parsedLimit,
+      };
+      state.teachers[idx] = updatedTeacher;
+      saveLocalBackupDb();
+      renderApp();
+      showToast(
+        parsedLimit === 0
+          ? `Kuota harian ${updatedTeacher.name} diatur menjadi Tanpa Batas.`
+          : `Batas pembuatan soal ${updatedTeacher.name} diatur maksimal ${parsedLimit} soal/hari.`,
+        'success',
+        'Kuota Harian Diperbarui'
+      );
+      await postToSpreadsheet({
+        action: 'batchUpsert',
+        items: [{ table: 'teachers', data: updatedTeacher }],
+      });
+    }
     function getNextQuestionOrder(teacher) {
       const wsQs = state.questions.filter((q) => isOwnedByTeacher(q, teacher));
       if (wsQs.length === 0) return 1;
@@ -3500,6 +3542,25 @@ function doPost(e) {
     }
 
     async function generateAndSaveTkaBundleForTp(teacher, tpRecord, count = 5) {
+      const quotaInfo = getTeacherDailyQuotaInfo(teacher);
+      if (!quotaInfo.isUnlimited) {
+        if (quotaInfo.remaining <= 0) {
+          showToast(
+            `Kuota harian Anda sudah habis (${quotaInfo.usedToday}/${quotaInfo.limit} soal hari ini). Silakan lanjutkan besok atau hubungi Proktor Utama.`,
+            'warning',
+            'Batas Harian Tercapai'
+          );
+          return 0;
+        }
+        if (Number(count) > quotaInfo.remaining) {
+          showToast(
+            `Sisa kuota harian Anda tinggal ${quotaInfo.remaining} soal (dari batas ${quotaInfo.limit} soal/hari). Sistem menyesuaikan jumlah pembuatan menjadi ${quotaInfo.remaining} butir.`,
+            'info',
+            'Penyesuaian Kuota Harian'
+          );
+          count = quotaInfo.remaining;
+        }
+      }
       const targetCount = Math.max(1, Math.min(30, Number(count) || 5));
       const selectedDeepPhase = tpRecord.deepLearningPhase || DEEP_LEARNING_EXPERIENCES[1];
       const selectedGradDim = tpRecord.graduateDimension || GRADUATE_PROFILE_DIMENSIONS[0];
@@ -6280,7 +6341,7 @@ Berikan penilaian OBJEKTIF dan KRITIS:
           guruList.length === 0
             ? `
               <tr>
-                <td colspan="6" class="p-6 text-center text-slate-500">
+                <td colspan="7" class="p-6 text-center text-slate-500">
                   Belum ada akun Guru Mata Pelajaran terdaftar. Silakan tambahkan akun guru melalui menu <strong>Manajemen Guru</strong> untuk mendistribusikan token ujian.
                 </td>
               </tr>
@@ -6297,6 +6358,22 @@ Berikan penilaian OBJEKTIF dan KRITIS:
                         <span class="px-2.5 py-1 rounded bg-sky-50 border border-sky-200 font-mono font-extrabold text-[#002b7a]">${escapeHtml(g.token)}</span>
                       </td>
                       <td class="p-3 text-center font-bold">${qCount} Soal</td>
+                      <td class="p-3 text-center">
+                    <div class="inline-flex flex-col items-center gap-0.5">
+                      <input
+                        type="number"
+                        min="0"
+                        max="500"
+                        value="${g.dailyQuestionLimit ?? 20}"
+                        onchange="updateTeacherDailyLimit('${g.id}', this.value)"
+                        class="w-16 px-2 py-1 text-xs font-bold text-center border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500"
+                        title="0 = Tanpa batas, isi angka misal 10 atau 20 untuk membatasi soal per hari"
+                      />
+                      <span class="text-[10px] text-slate-500">
+                        Hari ini: <strong>${getTeacherDailyQuotaInfo(g).usedToday}</strong>
+                      </span>
+                    </div>
+                  </td>
                       <td class="p-3 text-center">
                         <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
                           isOpen ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
@@ -6430,6 +6507,7 @@ Berikan penilaian OBJEKTIF dan KRITIS:
                       <th class="p-3">Guru Pengampu</th>
                       <th class="p-3">Token Ujian</th>
                       <th class="p-3 text-center">Bank Soal</th>
+                      <th class="p-3 text-center">Batas Soal/Hari</th>
                       <th class="p-3 text-center">Status Sesi</th>
                       <th class="p-3 text-right">Aksi Cepat</th>
                     </tr>
