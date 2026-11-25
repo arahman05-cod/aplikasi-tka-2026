@@ -5680,24 +5680,75 @@ Berikan penilaian OBJEKTIF dan KRITIS:
                           : ''
                       }
 
-                      ${
-                        state.teacherRegisterForm.successMessage
-                          ? `<div class="p-3.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs space-y-2 leading-relaxed">
-                              <p class="font-extrabold text-emerald-800">✓ Pendaftaran Berhasil Disimpan!</p>
-                              <p>${escapeHtml(state.teacherRegisterForm.successMessage)}</p>
-                              <div class="p-2.5 rounded-lg bg-white border border-emerald-200 flex items-center justify-between gap-2">
-                                <div>
-                                  <span class="text-[10px] font-bold uppercase text-slate-500 block">Nomor Tujuan DANA (Rp.10K,20K,30K,100k)</span>
-                                  <span class="font-mono font-extrabold text-sm text-[#002b7a]">082371423355</span>
-                                </div>
-                                <button type="button" onclick="copyToClipboard('082371423355', 'Nomor DANA')" class="px-2.5 py-1.5 rounded-lg bg-[#0095ff] hover:bg-[#0288d1] text-white font-bold text-[11px] shrink-0">
-                                  Salin Nomor
-                                </button>
-                              </div>
-                            </div>`
-                          : ''
-                      }
+                     ${
+            state.teacherRegisterForm.successMessage
+              ? `<div class="p-4 rounded-xl bg-white border-2 border-emerald-300 shadow-sm space-y-3.5 text-xs">
+                  <!-- Header Sukses -->
+                  <div class="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 leading-relaxed">
+                    <p class="font-extrabold text-emerald-800 text-sm mb-0.5">✓ Pendaftaran Berhasil Disimpan!</p>
+                    <p class="text-emerald-700">${escapeHtml(state.teacherRegisterForm.successMessage)}</p>
+                  </div>
 
+                  <!-- Step 1: Pilih Nominal -->
+                  <div>
+                    <span class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                      1. Pilih Nominal Donasi Aktivasi:
+                    </span>
+                    <div class="grid grid-cols-2 gap-2">
+                      ${['Rp 10.000', 'Rp 20.000', 'Rp 30.000', 'Rp 100.000'].map(nom => {
+                        const isSelected = state.teacherRegisterForm.selectedNominal === nom;
+                        return `
+                          <button type="button"
+                            onclick="
+                              state.teacherRegisterForm.selectedNominal = '${nom}';
+                              const parent = this.parentElement;
+                              parent.querySelectorAll('button').forEach(b => {
+                                b.style.borderColor = '#cbd5e1';
+                                b.style.backgroundColor = '#f8fafc';
+                                b.style.color = '#334155';
+                              });
+                              this.style.borderColor = '#0095ff';
+                              this.style.backgroundColor = '#e0f2fe';
+                              this.style.color = '#002b7a';
+                              document.getElementById('tka-dana-box').classList.remove('hidden');
+                              document.getElementById('tka-dana-nom').textContent = '${nom}';
+                              const msg = encodeURIComponent('Halo Proktor Utama, saya sudah mendaftar di Aplikasi Penunjang TKA dan melakukan transfer donasi aktivasi sebesar ${nom}. Berikut bukti transfernya:');
+                              document.getElementById('tka-dana-wa').href = 'https://wa.me/6282371423355?text=' + msg;
+                            "
+                            style="border-color: ${isSelected ? '#0095ff' : '#cbd5e1'}; background-color: ${isSelected ? '#e0f2fe' : '#f8fafc'}; color: ${isSelected ? '#002b7a' : '#334155'};"
+                            class="py-2.5 px-3 rounded-lg border-2 font-extrabold transition text-xs">
+                            ${nom}
+                          </button>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+
+                  <!-- Step 2: Nomor Tujuan DANA -->
+                  <div id="tka-dana-box" class="${state.teacherRegisterForm.selectedNominal ? '' : 'hidden'} p-3 rounded-xl bg-sky-50 border border-sky-200 space-y-2.5">
+                    <div class="flex items-center justify-between">
+                      <span class="px-2 py-0.5 rounded bg-[#0095ff] text-white font-bold text-[10px]">TUJUAN DANA</span>
+                      <span id="tka-dana-nom" class="font-extrabold text-sm text-[#002b7a]">${state.teacherRegisterForm.selectedNominal || 'Rp 0'}</span>
+                    </div>
+
+                    <div class="p-2.5 rounded-lg bg-white border border-sky-200 flex items-center justify-between gap-2">
+                      <div>
+                        <span class="text-[10px] font-bold uppercase text-slate-500 block">Nomor Tujuan DANA</span>
+                        <span class="font-mono font-extrabold text-sm text-[#002b7a]">082371423355</span>
+                      </div>
+                      <button type="button" onclick="copyToClipboard('082371423355', 'Nomor DANA')" class="px-3 py-1.5 rounded-lg bg-[#0095ff] hover:bg-[#0080e1] text-white font-bold text-[11px] shrink-0">
+                        Salin Nomor
+                      </button>
+                    </div>
+
+                    <a id="tka-dana-wa" href="https://wa.me/6282371423355?text=${encodeURIComponent('Halo Proktor Utama, saya sudah mendaftar di Aplikasi Penunjang TKA dan melakukan transfer donasi aktivasi sebesar ' + (state.teacherRegisterForm.selectedNominal || '') + '. Berikut bukti transfernya:')}" target="_blank" rel="noopener"
+                      class="block w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-center text-[11px] transition">
+                      Kirim Bukti Transfer via WhatsApp
+                    </a>
+                  </div>
+                </div>`
+              : ''
+          }
                       <div class="pt-1 space-y-2">
                         <button type="submit" class="w-full py-3 px-4 rounded-lg bg-[#0095ff] hover:bg-[#0288d1] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-sky-500/20 transition-all">
                           Simpan
