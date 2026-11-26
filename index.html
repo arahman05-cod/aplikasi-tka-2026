@@ -1473,6 +1473,9 @@ function getTodayDateKey() {
             token: String(t.token || '').trim().toUpperCase(),
             durationMinutes: Number(t.durationMinutes) || 60,
             targetQuestionCount: Number(t.targetQuestionCount) || 5,
+            dailyQuestionLimit: t.dailyQuestionLimit !== undefined && t.dailyQuestionLimit !== null && String(t.dailyQuestionLimit).trim() !== ''
+              ? Math.max(0, Number(t.dailyQuestionLimit) || 0)
+              : 20,
             examOpen: t.examOpen !== false && String(t.examOpen).toLowerCase() !== 'false',
           }))
         : [];
