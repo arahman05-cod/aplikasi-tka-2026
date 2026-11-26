@@ -6464,7 +6464,7 @@ Berikan penilaian OBJEKTIF dan KRITIS:
       const navItems = [
         { id: 'beranda', label: 'Beranda Utama', badge: '' },
         { id: 'tp_soal', label: 'TP, Kisi-Kisi & Soal', badge: `${wsQuestions.length}` },
-        { id: 'rekap', label: 'Rekap Nilai Siswa', badge: `${deduplicateSessionsList(state.sessions).length}` },
+        { id: 'rekap', label: 'Rekap Nilai Siswa', badge: `${(isMainProktor ? deduplicateSessionsList(state.sessions) : deduplicateSessionsList(state.sessions).filter((s) => String(s.teacherId || '').trim() === String(currentTeacher.id || '').trim() || String(s.tokenUsed || '').trim().toUpperCase() === String(currentTeacher.token || '').trim().toUpperCase())).length}` },
         ...(isMainProktor
           ? [
               {
