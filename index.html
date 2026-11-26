@@ -6132,25 +6132,69 @@ Berikan penilaian OBJEKTIF dan KRITIS:
                 <span class="text-xs font-semibold text-slate-500">Terjawab: ${answeredCount}/${totalQ}</span>
               </div>
 
-              <div class="p-5 sm:p-6 space-y-5">
-                ${
-                  currentQ.stimulusImage
-                    ? `
-                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                      <div class="flex justify-center">
-                        <img src="${escapeHtml(currentQ.stimulusImage)}" alt="Gambar Stimulus Soal" onclick="state.imageZoomModal={src:this.src,caption:${JSON.stringify(currentQ.stimulusCaption || 'Gambar Stimulus Soal No. ' + (ss.currentQIndex + 1))}};renderModals()" class="max-h-72 w-auto max-w-full rounded-lg object-contain cursor-zoom-in border border-slate-200 bg-white" title="Klik untuk memperbesar gambar" />
-                      </div>
-                      <div class="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                        <span>${currentQ.stimulusCaption ? escapeHtml(currentQ.stimulusCaption) : 'Gambar Stimulus Soal'}</span>
-                        <button type="button" onclick="state.imageZoomModal={src:${JSON.stringify(currentQ.stimulusImage)},caption:${JSON.stringify(currentQ.stimulusCaption || 'Gambar Stimulus Soal No. ' + (ss.currentQIndex + 1))}};renderModals()" class="text-[#002b7a] font-bold hover:underline shrink-0">🔍 Perbesar</button>
-                      </div>
-                    </div>
-                  `
-                    : ''
+             <div class="p-5 sm:p-6 space-y-5">
+            ${(() => {
+              let cAn = currentQ.analysis || {};
+              if ((!cAn || !cAn.stimulusText) && typeof currentQ.analysisJson === 'string' && currentQ.analysisJson) {
+                try { cAn = { ...cAn, ...JSON.parse(currentQ.analysisJson) }; } catch (e) {}
+              }
+              const sText = currentQ.stimulusText || cAn.stimulusText || '';
+              if (!sText) return '';
+              const sTitle = currentQ.stimulusTitle || cAn.stimulusTitle || '';
+              const sGroupId = currentQ.stimulusGroupId || cAn.stimulusGroupId || '';
+              let startIdx = ss.currentQIndex;
+              let endIdx = ss.currentQIndex;
+              if (sGroupId) {
+                while (startIdx - 1 >= 0) {
+                  const pQ = ss.questions[startIdx - 1];
+                  let pAn = pQ.analysis || {};
+                  if (!pAn.stimulusGroupId && typeof pQ.analysisJson === 'string') {
+                    try { pAn = { ...pAn, ...JSON.parse(pQ.analysisJson) }; } catch (e) {}
+                  }
+                  if ((pQ.stimulusGroupId || pAn.stimulusGroupId || '') === sGroupId) startIdx--;
+                  else break;
                 }
-                <div class="leading-relaxed text-slate-900 font-medium ${fontSizeClass}">
-                  ${renderMathHtml(currentQ.questionText, true)}
+                while (endIdx + 1 < ss.questions.length) {
+                  const nQ = ss.questions[endIdx + 1];
+                  let nAn = nQ.analysis || {};
+                  if (!nAn.stimulusGroupId && typeof nQ.analysisJson === 'string') {
+                    try { nAn = { ...nAn, ...JSON.parse(nQ.analysisJson) }; } catch (e) {}
+                  }
+                  if ((nQ.stimulusGroupId || nAn.stimulusGroupId || '') === sGroupId) endIdx++;
+                  else break;
+                }
+              }
+              const rangeText = endIdx > startIdx ? `Digunakan untuk Soal No. ${startIdx + 1} s.d. ${endIdx + 1}` : `Naskah Stimulus Soal No. ${startIdx + 1}`;
+              return `
+                <div class="p-4 sm:p-5 rounded-xl bg-sky-50/80 border-l-4 border-[#0095ff] border border-sky-200/80 space-y-2 shadow-xs">
+                  <div class="flex flex-wrap items-center justify-between gap-2 border-b border-sky-200/80 pb-2">
+                    <span class="px-2.5 py-0.5 rounded-md bg-[#002b7a] text-white text-[11px] font-extrabold tracking-wide">Naskah Stimulus &bull; ${rangeText}</span>
+                    ${sTitle ? `<span class="text-xs font-extrabold text-[#002b7a]">${escapeHtml(sTitle)}</span>` : ''}
+                  </div>
+                  <div class="leading-relaxed text-slate-800 whitespace-pre-line ${fontSizeClass}">
+                    ${renderMathHtml(sText, true)}
+                  </div>
                 </div>
+              `;
+            })()}
+            ${
+              currentQ.stimulusImage
+                ? `
+                  <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                    <div class="flex justify-center">
+                      <img src="${escapeHtml(currentQ.stimulusImage)}" alt="Gambar Stimulus Soal" onclick="state.imageZoomModal={src:this.src,caption:${JSON.stringify(currentQ.stimulusCaption || 'Gambar Stimulus Soal No. ' + (ss.currentQIndex + 1))}};renderApp();" class="max-h-72 w-auto object-contain rounded-lg border border-slate-200 bg-white cursor-zoom-in shadow-sm" title="Klik untuk memperbesar gambar" />
+                    </div>
+                    <div class="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span>${currentQ.stimulusCaption ? escapeHtml(currentQ.stimulusCaption) : 'Gambar Stimulus Soal'}</span>
+                      <button type="button" onclick="state.imageZoomModal={src:${JSON.stringify(currentQ.stimulusImage)},caption:${JSON.stringify(currentQ.stimulusCaption || 'Gambar Stimulus Soal No. ' + (ss.currentQIndex + 1))}};renderApp();" class="px-2 py-0.5 rounded bg-sky-100 text-[#002b7a] font-bold hover:bg-sky-200">Perbesar Gambar</button>
+                    </div>
+                  </div>
+                `
+                : ''
+            }
+            <div class="leading-relaxed text-slate-900 font-medium ${fontSizeClass}">
+              ${renderMathHtml(currentQ.questionText, true)}
+            </div>
 
                 ${questionBodyHtml}
               </div>
