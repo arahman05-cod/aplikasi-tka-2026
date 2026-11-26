@@ -3028,8 +3028,8 @@ const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { metho
           tpAccumulator[tpKey].earnedW += earned;
         });
 
-        const finalScore = totalWeight > 0 ? Math.round((earnedWeight / totalWeight) * 100) : 0;
-        const tpBreakdown = Object.values(tpAccumulator).map((item) => {
+        let finalScore = totalWeight > 0 ? Math.round((earnedWeight / totalWeight) * 100) : 0;
+        let tpBreakdown = Object.values(tpAccumulator).map((item) => {
           const tpScore = item.totalW > 0 ? Math.round((item.earnedW / item.totalW) * 100) : 0;
           return {
             tpCode: item.tpCode,
@@ -3044,7 +3044,7 @@ const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { metho
           tpBreakdown.length > 0
             ? Math.round(tpBreakdown.reduce((a, b) => a + b.kktp, 0) / tpBreakdown.length)
             : 75;
-        const overallPassed = finalScore >= avgKktp;
+        let overallPassed = finalScore >= avgKktp;
 
         const existingSession = state.sessions.find(
           (s) =>
@@ -3053,7 +3053,72 @@ const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { metho
               String(s.teacherId || '').trim().toLowerCase() === String(ss.teacher.id).trim().toLowerCase())
         );
 
-        await saveRecordUnified('sessions', existingSession ? existingSession.id : ss.activeSessionId, {
+        const targetSessionId = existingSession ? existingSession.id : ss.activeSessionId;
+        const startedAtIso = existingSession?.startedAt || new Date().toISOString();
+        const finishedAtIso = new Date().toISOString();
+
+        // 1. Simpan cadangan lokal terlebih dahulu sebelum kirim ke server (Anti-Hilang Data)
+        const pendingSubmission = {
+          sessionId: targetSessionId,
+          studentName: ss.profile.name,
+          nisn: ss.profile.nisn,
+          studentClass: ss.profile.studentClass,
+          teacherId: ss.teacher.id,
+          teacherName: ss.teacher.name,
+          subject: ss.teacher.subject,
+          tokenUsed: ss.profile.token,
+          startedAt: startedAtIso,
+          finishedAt: finishedAtIso,
+          answers: ss.answers || {},
+        };
+        try {
+          localStorage.setItem('tka_pending_submit_' + ss.profile.nisn, JSON.stringify(pendingSubmission));
+        } catch (e) {}
+
+        // 2. Kirim ke server GAS (submitExam) dengan Auto-Retry 3x untuk menghadapi jaringan padat
+        let serverResult = null;
+        if (isSpreadsheetMode()) {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const res = await fetch(state.spreadsheetApiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({
+                  action: 'submitExam',
+                  ...pendingSubmission,
+                }),
+              });
+              const parsed = await res.json();
+              if (parsed && parsed.ok) {
+                serverResult = parsed;
+                try {
+                  localStorage.removeItem('tka_pending_submit_' + ss.profile.nisn);
+                } catch (e) {}
+                break;
+              } else if (parsed && parsed.error) {
+                throw new Error(parsed.error);
+              }
+            } catch (err) {
+              if (attempt < 3) {
+                await new Promise((r) => setTimeout(r, attempt * 1500));
+              } else {
+                showToast('Jaringan padat/terputus. Jawaban tersimpan aman di perangkat, silakan lapor Proktor jika belum masuk rekap.', 'warning');
+              }
+            }
+          }
+        }
+
+        if (serverResult) {
+          finalScore = Number(serverResult.score) || 0;
+          overallPassed = Boolean(serverResult.passed);
+          if (Array.isArray(serverResult.tpBreakdown)) {
+            tpBreakdown = serverResult.tpBreakdown;
+          }
+        }
+
+        // 3. Sinkronkan state lokal agar hasil ujian langsung muncul di layar siswa
+        const finalRecord = {
+          id: targetSessionId,
           studentName: ss.profile.name,
           nisn: ss.profile.nisn,
           studentClass: ss.profile.studentClass,
@@ -3062,13 +3127,17 @@ const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { metho
           subject: ss.teacher.subject,
           tokenUsed: ss.profile.token,
           status: 'selesai',
-          startedAt: existingSession?.startedAt || new Date().toISOString(),
-          finishedAt: new Date().toISOString(),
+          startedAt: startedAtIso,
+          finishedAt: finishedAtIso,
           score: finalScore,
           passed: overallPassed,
           tpBreakdownJson: JSON.stringify(tpBreakdown),
           answersJson: JSON.stringify(ss.answers),
-        });
+        };
+        const idxSession = state.sessions.findIndex((s) => s.id === targetSessionId);
+        if (idxSession >= 0) state.sessions[idxSession] = finalRecord;
+        else state.sessions.push(finalRecord);
+        saveLocalBackupDb();
 
         clearStudentExamDraft();
 
