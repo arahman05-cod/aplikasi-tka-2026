@@ -121,9 +121,8 @@ async function discoverGroqModels(groqKey) {
 }
 
 async function callGroqFallback(groqKey, systemPrompt, userPrompt) {
-  const schemaInstruction = `\n\nWAJIB keluarkan HANYA JSON valid dengan format persis:
-{"items":[{"deepLearningPhase":"...","graduateDimension":"...","material":"...","stimulusType":"...","indicator":"...","cognitiveLevel":"L2 - Aplikasi (C3) atau L3 - Penalaran (C4)","questionType":"PG atau PG_KOMPLEKS atau BENAR_SALAH","questionText":"...","optionStructureSummary":"...","options":["opsi 1","opsi 2","opsi 3","opsi 4","opsi 5"],"correctPgIndex":0,"correctMultiIndices":[0,1],"correctBsBooleans":[true,false,true,false,true]}]}`;
-
+  const schemaInstruction = `\n\nWAJIB keluarkan HANYA JSON valid dengan format persis (kelompokkan 2-3 soal berurutan menggunakan kode stimulusGroup yang sama, misalnya G1 lalu G2, dengan stimulusText identik di dalam kelompok yang sama):
+{"items":[{"stimulusGroup":"G1","stimulusTitle":"Judul Naskah Stimulus","stimulusText":"Teks naskah stimulus kontekstual 2-3 paragraf yang kaya data dan digunakan bersama untuk 2-3 soal berurutan.","deepLearningPhase":"...","graduateDimension":"...","material":"...","stimulusType":"...","indicator":"...","cognitiveLevel":"L2 - Aplikasi (C3) atau L3 - Penalaran (C4)","questionType":"PG atau PG_KOMPLEKS atau BENAR_SALAH","questionText":"Pokok pertanyaan spesifik butir ini tanpa mengulang naskah stimulus","optionStructureSummary":"...","options":["opsi 1","opsi 2","opsi 3","opsi 4","opsi 5"],"correctPgIndex":0,"correctMultiIndices":[0,1],"correctBsBooleans":[true,false,true,false,true]}]}`;
   const modelsToTry = await discoverGroqModels(groqKey);
   let lastGroqErr = 'Tidak ada model Groq yang merespons.';
 
