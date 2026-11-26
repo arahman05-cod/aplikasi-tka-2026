@@ -1800,14 +1800,15 @@ function getTodayDateKey() {
       }
     }
 
-    async function fetchFromSpreadsheet(overrideUrl = '', silent = true) {
+    async function fetchFromSpreadsheet(overrideUrl = '', silent = true, forceFull = false) {
       const targetUrl = String(overrideUrl || state.spreadsheetApiUrl || '').trim();
       if (!targetUrl || !targetUrl.startsWith('http')) return false;
 
       if (!silent) setGlobalLoading(true);
       try {
         const sep = targetUrl.includes('?') ? '&' : '?';
-        const res = await fetch(`${targetUrl}${sep}t=${Date.now()}`, { method: 'GET' });
+const modeParam = (forceFull || (state.authUser && (state.authUser.role === 'guru' || state.authUser.role === 'proktor'))) ? '' : '&mode=student';
+const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { method: 'GET' });
         const text = await res.text();
         const parsed = JSON.parse(text);
 
@@ -2687,9 +2688,9 @@ function getTodayDateKey() {
         return;
       }
 
-      if (state.teachers.length === 0 && isSpreadsheetMode()) {
-        await fetchFromSpreadsheet(state.spreadsheetApiUrl, true);
-      }
+      if (isSpreadsheetMode()) {
+  await fetchFromSpreadsheet(state.spreadsheetApiUrl, true, true);
+}
 
       let matched = state.teachers.find(
         (t) =>
