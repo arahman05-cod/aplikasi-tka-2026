@@ -3790,8 +3790,11 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA BERBASIS NASKAH STIMULUS TERPADU (TESTLET):
         });
 
         const qId = `questions_${Date.now()}_${i}_${Math.floor(Math.random() * 9000)}`;
-        localAudit.generationSource = item.generationSource || 'GEMINI';
-        const rawQuestionRecord = {
+          localAudit.generationSource = item.generationSource || 'GEMINI';
+          if (item.stimulusGroupId) localAudit.stimulusGroupId = item.stimulusGroupId;
+          if (item.stimulusTitle) localAudit.stimulusTitle = item.stimulusTitle;
+          if (item.stimulusText) localAudit.stimulusText = item.stimulusText;
+          const rawQuestionRecord = {
           id: qId,
           teacherId: teacher.id,
           teacherToken: teacher.token,
