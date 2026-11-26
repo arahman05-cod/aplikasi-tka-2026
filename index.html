@@ -6956,21 +6956,64 @@ Berikan penilaian OBJEKTIF dan KRITIS:
           const questionCardsHtml =
             wsQuestions.length === 0
               ? '<div class="p-6 text-center text-xs text-slate-500 bg-white rounded-xl border border-slate-200">Belum ada butir soal TKA pada bank soal ini. Susun soal manual di formulir sebelah kiri, impor dari JSON, atau gunakan generator otomatis dari menu TP.</div>'
-              : wsQuestions
-                  .map((q, idx) => {
-                    const an = q.analysis || {};
-                    const score = Number(an.feasibilityScore) || 95;
-                    const badgeColor =
-                      score >= 85
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : score >= 70
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-rose-100 text-rose-800';
-                    const isFirst = idx === 0;
-                    const isLast = idx === wsQuestions.length - 1;
+             : wsQuestions
+                .map((q, idx) => {
+                  let an = q.analysis || {};
+                  if ((!an || !an.stimulusText) && typeof q.analysisJson === 'string' && q.analysisJson) {
+                    try { an = { ...an, ...JSON.parse(q.analysisJson) }; } catch (e) {}
+                  }
+                  const score = Number(an.feasibilityScore) || 95;
+                  const badgeColor =
+                    score >= 85
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : score >= 70
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-rose-100 text-rose-800';
+                  const isFirst = idx === 0;
+                  const isLast = idx === wsQuestions.length - 1;
 
-                    return `
-                      <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2.5 text-xs">
+                  const stimGroupId = q.stimulusGroupId || an.stimulusGroupId || '';
+                  const stimTitle = q.stimulusTitle || an.stimulusTitle || '';
+                  const stimText = q.stimulusText || an.stimulusText || '';
+                  let groupHeaderHtml = '';
+                  if (stimText) {
+                    const prevQ = idx > 0 ? wsQuestions[idx - 1] : null;
+                    let prevAn = prevQ ? (prevQ.analysis || {}) : {};
+                    if (prevQ && !prevAn.stimulusGroupId && typeof prevQ.analysisJson === 'string') {
+                      try { prevAn = { ...prevAn, ...JSON.parse(prevQ.analysisJson) }; } catch (e) {}
+                    }
+                    const prevGroupId = prevQ ? (prevQ.stimulusGroupId || prevAn.stimulusGroupId || '') : '';
+                    const isGroupStart = !stimGroupId || stimGroupId !== prevGroupId;
+                    if (isGroupStart) {
+                      let endIdx = idx;
+                      if (stimGroupId) {
+                        while (endIdx + 1 < wsQuestions.length) {
+                          const nextQ = wsQuestions[endIdx + 1];
+                          let nextAn = nextQ.analysis || {};
+                          if (!nextAn.stimulusGroupId && typeof nextQ.analysisJson === 'string') {
+                            try { nextAn = { ...nextAn, ...JSON.parse(nextQ.analysisJson) }; } catch (e) {}
+                          }
+                          const nextGroupId = nextQ.stimulusGroupId || nextAn.stimulusGroupId || '';
+                          if (nextGroupId === stimGroupId) endIdx++;
+                          else break;
+                        }
+                      }
+                      const rangeLabel = endIdx > idx ? `Untuk Soal No. ${idx + 1} s.d. ${endIdx + 1}` : `Untuk Soal No. ${idx + 1}`;
+                      groupHeaderHtml = `
+                        <div class="bg-sky-50/90 border-l-4 border-[#0095ff] rounded-xl p-4 mb-2.5 shadow-sm space-y-1.5 text-xs">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="px-2.5 py-0.5 rounded-full bg-[#002b7a] text-white font-extrabold text-[11px]">Naskah Stimulus TKA &bull; ${rangeLabel}</span>
+                            ${stimTitle ? `<span class="font-bold text-[#002b7a]">${escapeHtml(stimTitle)}</span>` : ''}
+                          </div>
+                          <div class="text-slate-800 leading-relaxed whitespace-pre-line pt-1">${renderMathHtml(stimText, true)}</div>
+                        </div>
+                      `;
+                    }
+                  }
+
+                  return `
+                    ${groupHeaderHtml}
+                    <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2.5 text-xs">
                         <div class="flex flex-wrap items-center justify-between gap-2">
                           <div class="flex flex-wrap items-center gap-1.5">
                             <span class="px-2.5 py-1 rounded-lg bg-[#002b7a] text-white font-extrabold">No. ${idx + 1}</span>
