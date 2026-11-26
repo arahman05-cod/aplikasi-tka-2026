@@ -3560,22 +3560,24 @@ function getTodayDateKey() {
       const selectedGradDim = tpRecord.graduateDimension || GRADUATE_PROFILE_DIMENSIONS[0];
 
       const systemPrompt = `Anda adalah pakar pengembang soal Tes Kemampuan Akademik (TKA) Pusmendik Kemendikdasmen RI yang mengacu ketat pada:
-- UU No. 20 Tahun 2003 Pasal 57–59 & PP No. 57/2021 jo. PP No. 4/2022 (validitas isi evaluasi hasil belajar);
-- Permendikdasmen No. 9 Tahun 2025 & Permendikdasmen No. 9 Tahun 2026 tentang Penyelenggaraan TKA;
+- UU No. 20 Tahun 2003 Pasal 57-59 & PP No. 57/2021 jo. PP No. 4/2022 (validitas isi evaluasi hasil belajar);
+- Permendikdasmen No. 9 Tahun 2025 & Permendikdasmen No. 11 Tahun 2025 tentang Penyelenggaraan TKA;
 - Perka BSKAP No. 45 & 47 Tahun 2025 tentang Kerangka Asesmen TKA;
 - Panduan Pembelajaran Mendalam (Deep Learning) Kemendikdasmen 2025/2026.
 
-ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
-1. VALIDITAS ISI SESUAI TP (UU SISDIKNAS): Seluruh butir soal WAJIB mengukur kompetensi spesifik yang tertuang dalam Deskripsi Capaian Tujuan Pembelajaran (TP) pada mata pelajaran "${teacher.subject}". DILARANG membuat soal di luar topik TP atau soal generik.
+ATURAN WAJIB PENYUSUNAN SOAL TKA BERBASIS NASKAH STIMULUS TERPADU (TESTLET):
+1. VALIDITAS ISI SESUAI TP (UU SISDIKNAS): Seluruh butir soal WAJIB mengukur kompetensi spesifik yang tertuang dalam Deskripsi Capaian Tujuan Pembelajaran (TP) pada mata pelajaran "${teacher.subject}". DILARANG membuat soal di luar lingkup TP.
 2. PENDEKATAN PEMBELAJARAN MENDALAM (DEEP LEARNING):
-  - Terapkan 3 Prinsip Pembelajaran Mendalam: Berkesadaran (Mindful), Bermakna (Meaningful), dan Menggembirakan (Joyful).
-  - Arahkan pada pengalaman belajar "${selectedDeepPhase}" dan penguatan dimensi profil lulusan "${selectedGradDim}".
-3. STIMULUS KONTEKSTUAL FUNGSIONAL: Setiap butir soal WAJIB diawali stimulus kontekstual nyata yang benar-benar berfungsi untuk menjawab soal.
-4. LEVEL KOGNITIF HOTS (L2 & L3): Fokuskan seluruh butir soal pada Level Kognitif L2 (Aplikasi/C3) dan L3 (Penalaran/C4–C5).
-5. KEUNIKAN SKENARIO PER BUTIR: Setiap butir soal WAJIB memiliki studi kasus, angka, nama entitas, dan sudut pandang masalah yang unik.
-6. VARIASI BENTUK SOAL RESMI TKA: Variasikan bentuk soal secara proporsional antara "PG", "PG_KOMPLEKS", dan "BENAR_SALAH".
-7. KESETARAAN STRUKTUR KALIMAT & PANJANG TEKS ALAMI (EYD EDISI V): Pengecoh homogen, rasional, struktur paralel, panjang opsi seimbang (selisih <= 12%).
-8. SEBARAN KUNCI JAWABAN: Acak posisi kunci jawaban sehingga tersebar merata.`;
+   - Terapkan 3 Prinsip Pembelajaran Mendalam: Berkesadaran (Mindful), Bermakna (Meaningful), dan Menggembirakan (Joyful).
+   - Arahkan pada pengalaman belajar "${selectedDeepPhase}" dan penguatan dimensi profil lulusan "${selectedGradDim}".
+3. FORMAT RESMI TKA (1 NASKAH STIMULUS UNTUK 2–3 SOAL BERURUTAN):
+   - Susun soal dalam bentuk KELOMPOK STIMULUS (Testlet): setiap 1 naskah stimulus ("stimulusTitle" + "stimulusText" yang kaya konteks nyata, data kuantitatif/angka, studi kasus, kondisi sistem, atau kutipan naskah 2–3 paragraf) digunakan bersama untuk 2 hingga 3 butir soal berurutan dengan kode "stimulusGroup" yang SAMA (misal: "G1", "G1", "G1" lalu "G2", "G2").
+   - Teks naskah utama diletakkan utuh di "stimulusText" (identik untuk semua butir dalam satu "stimulusGroup"), sedangkan "questionText" hanya berisi pokok pertanyaan spesifik untuk nomor butir tersebut tanpa mengulang-ulang naskah stimulus.
+   - Antarkelompok ("G1" vs "G2") wajib memiliki tema kasus, data, dan sudut pandang masalah yang 100% berbeda.
+4. LEVEL KOGNITIF HOTS (L2 & L3) & VARIASI BENTUK SOAL DALAM 1 NASKAH:
+   - Dalam satu kelompok stimulus yang sama, variasikan bentuk soal secara berjenjang: Butir 1 ("PG" - L2/L3 analisis kasus), Butir 2 ("PG_KOMPLEKS" - L3 evaluasi multi-faktor), dan Butir 3 ("BENAR_SALAH" - L3 pengujian validitas pernyataan terhadap data naskah).
+5. KESETARAAN STRUKTUR KALIMAT & PANJANG TEKS ALAMI (EYD EDISI V): Pengecoh homogen, rasional, struktur paralel, panjang opsi seimbang (selisih <= 12%).
+6. SEBARAN KUNCI JAWABAN: Acak posisi kunci jawaban sehingga tersebar merata.`;
 
       const responseSchema = {
         type: 'OBJECT',
@@ -3585,6 +3587,9 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
             items: {
               type: 'OBJECT',
               properties: {
+                stimulusGroup: { type: 'STRING' },
+                stimulusTitle: { type: 'STRING' },
+                stimulusText: { type: 'STRING' },
                 deepLearningPhase: { type: 'STRING' },
                 graduateDimension: { type: 'STRING' },
                 material: { type: 'STRING' },
@@ -3609,6 +3614,9 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
                 },
               },
               required: [
+                'stimulusGroup',
+                'stimulusTitle',
+                'stimulusText',
                 'deepLearningPhase',
                 'graduateDimension',
                 'material',
@@ -3626,7 +3634,7 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
         required: ['items'],
       };
 
-      const BATCH_SIZE = 5;
+      const BATCH_SIZE = 6;
       let generatedItems = [];
       const usedTopicsSummary = [];
       let fallbackCountUsed = 0;
@@ -3636,13 +3644,14 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
         const remaining = targetCount - generatedItems.length;
         const currentBatchSize = Math.min(BATCH_SIZE, remaining);
         const batchNumber = Math.floor(generatedItems.length / BATCH_SIZE) + 1;
+        const batchSeed = `${Date.now()}-B${batchNumber}`;
 
         const antiRepeatInstruction =
           usedTopicsSummary.length > 0
-            ? `\n\nPENTING — LARANGAN PENGULANGAN SKENARIO (BATCH KE-${batchNumber}):\nButir-butir berikut SUDAH DIBUAT sebelumnya. Buat studi kasus dan subtopik yang 100% BARU:\n- ${usedTopicsSummary.join('\n- ')}`
+            ? `\n\nPENTING - LARANGAN PENGULANGAN NASKAH (BATCH KE-${batchNumber}):\nNaskah stimulus berikut SUDAH DIBUAT sebelumnya. Buat naskah kasus dan topik yang 100% BARU:\n- ${usedTopicsSummary.join('\n- ')}`
             : '';
 
-        const userPrompt = `Susun paket lengkap sebanyak ${currentBatchSize} butir Kisi-Kisi Pembelajaran Mendalam dan ${currentBatchSize} butir Soal TKA yang UNIK dan BERBEDA satu sama lain untuk:
+        const userPrompt = `Susun paket lengkap sebanyak ${currentBatchSize} butir Kisi-Kisi Pembelajaran Mendalam dan ${currentBatchSize} butir Soal TKA berbasis Naskah Stimulus Terpadu (setiap 1 naskah stimulus digunakan bersama untuk 2–3 butir soal berurutan dengan kode stimulusGroup yang sama, misalnya G1 untuk 3 soal pertama lalu G2 untuk soal berikutnya) untuk:
 - Mata Pelajaran: ${teacher.subject}
 - Kode TP: ${tpRecord.code}
 - Fase / Kelas: ${tpRecord.phase}
@@ -3652,20 +3661,28 @@ ATURAN WAJIB PENYUSUNAN SOAL TKA & PEMBELAJARAN MENDALAM:
 - KKTP Minimal: ${tpRecord.kktp}${antiRepeatInstruction}`;
 
         try {
-         if (useBackupGenerator) throw new Error('DAILY_QUOTA_BACKUP_MODE');
+          if (useBackupGenerator) throw new Error('DAILY_QUOTA_BACKUP_MODE');
           const aiResult = await callGeminiTkaJson(systemPrompt, userPrompt, responseSchema);
           if (aiResult && Array.isArray(aiResult.items) && aiResult.items.length > 0) {
-            const batchNormalized = aiResult.items.slice(0, currentBatchSize).map((raw) => {
+            const batchNormalized = aiResult.items.slice(0, currentBatchSize).map((raw, rIdx) => {
               const qType =
                 raw.questionType === 'PG_KOMPLEKS' || raw.questionType === 'BENAR_SALAH'
                   ? raw.questionType
                   : 'PG';
               const harmonizedOpts = harmonizeGeneratedOptions(raw.options || []);
+              const rawGroupKey = String(raw.stimulusGroup || `G${Math.floor(rIdx / 3) + 1}`).trim();
+              const cleanStimulusText = String(raw.stimulusText || '').trim();
+              const cleanStimulusTitle = String(raw.stimulusTitle || raw.material || 'Naskah Stimulus TKA').trim();
+              const stimulusGroupId = cleanStimulusText ? `STIM-${batchSeed}-${rawGroupKey}` : '';
+
               usedTopicsSummary.push(
-                `${raw.material || 'Materi'}: ${String(raw.questionText || '').replace(/\s+/g, ' ').slice(0, 95)}...`
+                `${cleanStimulusTitle}: ${String(cleanStimulusText || raw.questionText || '').replace(/\s+/g, ' ').slice(0, 95)}...`
               );
               return {
                 ...raw,
+                stimulusGroupId,
+                stimulusTitle: cleanStimulusTitle,
+                stimulusText: cleanStimulusText,
                 deepLearningPhase: raw.deepLearningPhase || selectedDeepPhase,
                 graduateDimension: raw.graduateDimension || selectedGradDim,
                 questionType: qType,
