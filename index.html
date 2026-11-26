@@ -2688,16 +2688,42 @@ const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { metho
         return;
       }
 
-      if (isSpreadsheetMode()) {
-  await fetchFromSpreadsheet(state.spreadsheetApiUrl, true, true);
-}
+      let matched = null;
 
-      let matched = state.teachers.find(
-        (t) =>
-          String(t.username || '').trim().toLowerCase() === userInput &&
-          String(t.password || '').trim() === passInput
-      );
-
+  if (isSpreadsheetMode()) {
+    try {
+      const loginRes = await fetch(state.spreadsheetApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'login',
+          username: userInput,
+          password: passInput,
+        }),
+      });
+      const loginParsed = await loginRes.json();
+      if (loginParsed && loginParsed.ok && loginParsed.user) {
+        matched = loginParsed.user;
+        if (loginParsed.data) {
+          state.teachers = Array.isArray(loginParsed.data.teachers) ? loginParsed.data.teachers : state.teachers;
+          state.tps = Array.isArray(loginParsed.data.tps) ? loginParsed.data.tps : [];
+          state.blueprints = Array.isArray(loginParsed.data.blueprints) ? loginParsed.data.blueprints : [];
+          state.questions = Array.isArray(loginParsed.data.questions) ? loginParsed.data.questions : [];
+          state.sessions = Array.isArray(loginParsed.data.sessions) ? loginParsed.data.sessions : [];
+          state.registrations = Array.isArray(loginParsed.data.registrations) ? loginParsed.data.registrations : [];
+          saveLocalBackupDb();
+        }
+      }
+    } catch (loginErr) {
+      console.warn('Server login error, mencoba fallback lokal:', loginErr);
+    }
+  } else {
+    matched = state.teachers.find(
+      (t) =>
+        String(t.username || '').trim().toLowerCase() === userInput &&
+        String(t.password || '').trim() === passInput
+    );
+  }
       if (!matched) {
         const [uHash, pHash] = await Promise.all([sha256Hex(userInput), sha256Hex(passInput)]);
         if (uHash === PROKTOR_FALLBACK_USER_HASH && pHash === PROKTOR_FALLBACK_PASS_HASH) {
