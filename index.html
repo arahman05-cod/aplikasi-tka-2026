@@ -1807,7 +1807,8 @@ function getTodayDateKey() {
       if (!silent) setGlobalLoading(true);
       try {
         let parsed = null;
-      const isProktorSession = state.authUser && String(state.authUser.role || '').toLowerCase() === 'proktor';
+      const activeUserObj = state.teachers.find((t) => t.id === state.activeTeacherId);
+      const isProktorSession = activeUserObj && String(activeUserObj.role || '').toLowerCase() === 'proktor';
 
       if (isProktorSession) {
         const res = await fetch(targetUrl, {
@@ -1818,7 +1819,7 @@ function getTodayDateKey() {
         parsed = await res.json();
       } else {
         const sep = targetUrl.includes('?') ? '&' : '?';
-        const modeParam = (forceFull || (state.authUser && state.authUser.role === 'guru')) ? '' : '&mode=student';
+        const modeParam = (forceFull || (activeUserObj && activeUserObj.role === 'guru')) ? '' : '&mode=student';
         const res = await fetch(`${targetUrl}${sep}t=${Date.now()}${modeParam}`, { method: 'GET' });
         const text = await res.text();
         parsed = JSON.parse(text);
